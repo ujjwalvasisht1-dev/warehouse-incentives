@@ -123,7 +123,11 @@ def login():
             session['role'] = user['role']
             
             # Check if password needs to be changed (first login)
-            password_changed = user['password_changed'] if 'password_changed' in user.keys() else 0
+            try:
+                password_changed = user['password_changed'] if user['password_changed'] else 0
+            except:
+                password_changed = 0
+            
             if not password_changed and user['role'] in ['picker', 'supervisor']:
                 return redirect(url_for('change_password_first'))
             
@@ -160,9 +164,15 @@ def change_password_first():
         # Update password
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
-        ''', (generate_password_hash(new_password), session['user_id']))
+        try:
+            cursor.execute('''
+                UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+            ''', (generate_password_hash(new_password), session['user_id']))
+        except:
+            # Fallback if password_changed column doesn't exist
+            cursor.execute('''
+                UPDATE users SET password = ? WHERE picker_id = ?
+            ''', (generate_password_hash(new_password), session['user_id']))
         conn.commit()
         conn.close()
         
@@ -203,9 +213,14 @@ def change_password_settings():
             return render_template('change_password_settings.html', error='Passwords do not match')
         
         # Update password
-        cursor.execute('''
-            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
-        ''', (generate_password_hash(new_password), session['user_id']))
+        try:
+            cursor.execute('''
+                UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+            ''', (generate_password_hash(new_password), session['user_id']))
+        except:
+            cursor.execute('''
+                UPDATE users SET password = ? WHERE picker_id = ?
+            ''', (generate_password_hash(new_password), session['user_id']))
         conn.commit()
         conn.close()
         
