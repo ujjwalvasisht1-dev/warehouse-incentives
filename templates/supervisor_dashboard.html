@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supervisor Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="dashboard-container">
+        <header class="dashboard-header">
+            <h1>Supervisor Dashboard</h1>
+            <div class="header-actions">
+                <a href="{{ url_for('supervisor_download', filter=time_filter) }}" class="btn btn-secondary btn-sm">Download CSV</a>
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-sm">Logout</a>
+            </div>
+        </header>
+        
+        <div class="filter-tabs">
+            <button class="filter-btn" data-filter="today">Today</button>
+            <button class="filter-btn" data-filter="yesterday">Yesterday</button>
+            <button class="filter-btn" data-filter="this_week">This Week</button>
+            <button class="filter-btn" data-filter="last_week">Last Week</button>
+            <button class="filter-btn" data-filter="all_time">All Time</button>
+        </div>
+        
+        <div class="summary-stats">
+            <div class="summary-item">
+                <span class="summary-label">Total Pickers:</span>
+                <span class="summary-value" id="total-pickers">-</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Daily Average:</span>
+                <span class="summary-value" id="daily-avg">-</span>
+            </div>
+        </div>
+        
+        <div class="rankings-table-container">
+            <table class="rankings-table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Picker ID</th>
+                        <th>Picklists</th>
+                        <th>Items Picked</th>
+                        <th>Items Lost</th>
+                        <th>Score</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="rankings-body">
+                    <tr>
+                        <td colspan="7" class="loading">Loading rankings...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Picker Detail Modal -->
+        <div id="picker-modal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <h2 id="modal-picker-id">Picker Details</h2>
+                <div id="modal-content">
+                    <div class="loading">Loading details...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/supervisor_dashboard.js') }}"></script>
+</body>
+</html>
+

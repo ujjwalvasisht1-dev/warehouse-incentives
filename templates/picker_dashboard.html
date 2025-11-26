@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Picker Dashboard - {{ picker_id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="dashboard-container">
+        <header class="dashboard-header">
+            <h1>Picker Dashboard</h1>
+            <div class="header-actions">
+                <span class="picker-id">{{ picker_id }}</span>
+                <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-sm">Logout</a>
+            </div>
+        </header>
+        
+        <!-- Incentive Motivation Banner -->
+        <div class="incentive-banner" id="incentive-banner">
+            <div class="banner-header">
+                <span class="banner-icon">🏆</span>
+                <h2>Picker Incentive Program</h2>
+                <span class="banner-icon">🏆</span>
+            </div>
+            
+            <div class="incentive-tiers">
+                <div class="tier tier-gold" data-tier="1">
+                    <div class="tier-icon">🥇</div>
+                    <div class="tier-info">
+                        <div class="tier-name">Top 3</div>
+                        <div class="tier-reward">₹500 Bonus</div>
+                    </div>
+                </div>
+                <div class="tier tier-silver" data-tier="2">
+                    <div class="tier-icon">🥈</div>
+                    <div class="tier-info">
+                        <div class="tier-name">Top 10</div>
+                        <div class="tier-reward">₹300 Bonus</div>
+                    </div>
+                </div>
+                <div class="tier tier-bronze" data-tier="3">
+                    <div class="tier-icon">🥉</div>
+                    <div class="tier-info">
+                        <div class="tier-name">Top 25</div>
+                        <div class="tier-reward">₹150 Bonus</div>
+                    </div>
+                </div>
+                <div class="tier tier-star" data-tier="4">
+                    <div class="tier-icon">⭐</div>
+                    <div class="tier-info">
+                        <div class="tier-name">Top 50</div>
+                        <div class="tier-reward">₹100 Bonus</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="motivation-message" id="motivation-message">
+                <div class="message-text">Loading your status...</div>
+            </div>
+            
+            <div class="progress-to-next" id="progress-to-next">
+                <div class="progress-label">Progress to next tier</div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="tier-progress-bar"></div>
+                </div>
+                <div class="progress-info" id="progress-info"></div>
+            </div>
+        </div>
+        
+        <div class="filter-tabs">
+            <button class="filter-btn" data-filter="today">Today</button>
+            <button class="filter-btn" data-filter="yesterday">Yesterday</button>
+            <button class="filter-btn" data-filter="this_week">This Week</button>
+            <button class="filter-btn" data-filter="last_week">Last Week</button>
+            <button class="filter-btn" data-filter="all_time">All Time</button>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Unique Picklists</div>
+                <div class="stat-value" id="unique-picklists">0</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-label">Items Picked</div>
+                <div class="stat-value" id="items-picked">0</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-label">Items Lost</div>
+                <div class="stat-value" id="items-lost">0</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-label">Score</div>
+                <div class="stat-value" id="score">0</div>
+            </div>
+        </div>
+        
+        <div class="rank-card" id="rank-card">
+            <div class="rank-header">
+                <h2>Your Ranking</h2>
+                <div class="status-badge" id="status-badge">
+                    <span id="status-text">Loading...</span>
+                </div>
+            </div>
+            
+            <div class="rank-info">
+                <div class="rank-position">
+                    <span class="rank-number" id="rank">-</span>
+                    <span class="rank-total">of <span id="total-pickers">-</span> pickers</span>
+                </div>
+                
+                <div class="rank-details">
+                    <div class="rank-detail-item">
+                        <span class="detail-label">Items to next rank:</span>
+                        <span class="detail-value" id="items-to-next">-</span>
+                    </div>
+                    <div class="rank-detail-item">
+                        <span class="detail-label">Difference from #1:</span>
+                        <span class="detail-value" id="diff-from-first">-</span>
+                    </div>
+                    <div class="rank-detail-item">
+                        <span class="detail-label">Daily Average:</span>
+                        <span class="detail-value" id="daily-avg">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Leaderboard Table -->
+        <div class="leaderboard-section">
+            <h2>Leaderboard</h2>
+            <div class="rankings-table-container">
+                <table class="rankings-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Picker ID</th>
+                            <th>Picklists</th>
+                            <th>Items Picked</th>
+                            <th>Items Lost</th>
+                            <th>Score</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leaderboard-body">
+                        <tr>
+                            <td colspan="6" class="loading">Loading leaderboard...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="loading" id="loading">Loading data...</div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/picker_dashboard.js') }}"></script>
+</body>
+</html>
+

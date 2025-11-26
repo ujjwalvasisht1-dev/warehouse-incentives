@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warehouse Incentive System - Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-box">
+            <h1>Warehouse Incentive System</h1>
+            <h2>Login</h2>
+            
+            {% if error %}
+            <div class="error-message">{{ error }}</div>
+            {% endif %}
+            
+            <form method="POST" action="{{ url_for('login') }}">
+                <div class="form-group">
+                    <label for="picker_id">Picker ID / Username</label>
+                    <input type="text" id="picker_id" name="picker_id" required autofocus>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+            
+            <div class="login-info">
+                <p><strong>Sample Logins:</strong></p>
+                <p>Picker: Ca.3817385 / picker123</p>
+                <p>Supervisor: supervisor / supervisor123</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
