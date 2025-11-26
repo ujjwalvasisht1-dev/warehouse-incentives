@@ -8,8 +8,8 @@ import io
 from functools import wraps
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-in-production'
-app.config['DATABASE'] = 'incentives.db'
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
+app.config['DATABASE'] = os.environ.get('DATABASE_PATH', 'incentives.db')
 app.config['CSV_UPLOAD_FOLDER'] = 'csv_uploads'
 
 # Ensure CSV upload folder exists
@@ -542,5 +542,7 @@ def supervisor_download():
 
 if __name__ == '__main__':
     init_db()
-    app.run(debug=True, host='127.0.0.1', port=5001)
+    port = int(os.environ.get('PORT', 5001))
+    debug = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
+    app.run(debug=debug, host='0.0.0.0', port=port)
 
