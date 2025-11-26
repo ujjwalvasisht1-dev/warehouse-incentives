@@ -11,6 +11,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
 app.config['DATABASE'] = os.environ.get('DATABASE_PATH', 'incentives.db')
 app.config['CSV_UPLOAD_FOLDER'] = 'csv_uploads'
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max file size
 
 # Ensure CSV upload folder exists
 os.makedirs(app.config['CSV_UPLOAD_FOLDER'], exist_ok=True)
@@ -725,26 +726,27 @@ def admin_upload():
         return jsonify({'error': 'File must be a CSV'}), 400
     
     try:
-        # Read CSV content
-        content = file.read().decode('utf-8')
-        lines = content.strip().split('\n')
+        # Read CSV content with multiple encoding attempts
+        try:
+            content = file.read().decode('utf-8')
+        except UnicodeDecodeError:
+            file.seek(0)
+            content = file.read().decode('latin-1')
         
-        if len(lines) < 2:
-            return jsonify({'error': 'CSV file is empty or has no data rows'}), 400
-        
-        # Parse header
-        import csv as csv_module
-        reader = csv_module.DictReader(lines)
+        # Use StringIO for proper CSV parsing
+        csv_file = io.StringIO(content)
+        reader = csv.DictReader(csv_file)
         
         conn = get_db()
         cursor = conn.cursor()
         
         rows_inserted = 0
         pickers_added = 0
+        errors = []
         
-        for row in reader:
-            # Parse updated_at timestamp
+        for row_num, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)
             try:
+                # Parse updated_at timestamp
                 updated_at_str = row.get('updated_at', '').strip()
                 if not updated_at_str:
                     continue
@@ -756,58 +758,67 @@ def admin_upload():
                         updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S.%f')
                     except ValueError:
                         continue
-            except:
+                
+                # Get picker_id
+                picker_id = row.get('picker_ldap', '').strip()
+                if not picker_id:
+                    continue
+                
+                # Insert item record
+                cursor.execute('''
+                    INSERT INTO items (
+                        source_warehouse, picker_id, item_status, dispatch_by_date,
+                        external_picklist_id, location_bin_id, location_sequence,
+                        updated_at, csv_file
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    row.get('source_warehouse', ''),
+                    picker_id,
+                    row.get('item_status', ''),
+                    row.get('dispatch_by_date', ''),
+                    row.get('external_picklist_id', ''),
+                    row.get('location_bin_id', ''),
+                    row.get('location_sequence', ''),
+                    updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    file.filename
+                ))
+                rows_inserted += 1
+                
+                # Auto-create picker user if doesn't exist
+                try:
+                    cursor.execute('INSERT INTO users (picker_id, password, role, password_changed) VALUES (?, ?, ?, ?)',
+                                  (picker_id, generate_password_hash('picker123'), 'picker', 0))
+                    pickers_added += 1
+                except:
+                    pass  # User already exists
+                    
+            except Exception as row_error:
+                if len(errors) < 5:  # Only keep first 5 errors
+                    errors.append(f"Row {row_num}: {str(row_error)}")
                 continue
-            
-            # Get picker_id
-            picker_id = row.get('picker_ldap', '').strip()
-            if not picker_id:
-                continue
-            
-            # Insert item record
-            cursor.execute('''
-                INSERT INTO items (
-                    source_warehouse, picker_id, item_status, dispatch_by_date,
-                    external_picklist_id, location_bin_id, location_sequence,
-                    updated_at, csv_file
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                row.get('source_warehouse', ''),
-                picker_id,
-                row.get('item_status', ''),
-                row.get('dispatch_by_date', ''),
-                row.get('external_picklist_id', ''),
-                row.get('location_bin_id', ''),
-                row.get('location_sequence', ''),
-                updated_at,
-                file.filename
-            ))
-            rows_inserted += 1
-            
-            # Auto-create picker user if doesn't exist
-            try:
-                cursor.execute('INSERT INTO users (picker_id, password, role) VALUES (?, ?, ?)',
-                              (picker_id, generate_password_hash('picker123'), 'picker'))
-                pickers_added += 1
-            except:
-                pass  # User already exists
         
         # Record the upload
         cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
-                      (file.filename, datetime.now()))
+                      (file.filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         
         conn.commit()
         conn.close()
         
-        return jsonify({
+        result = {
             'success': True,
             'rows_inserted': rows_inserted,
             'pickers_added': pickers_added,
             'filename': file.filename
-        })
+        }
+        
+        if errors:
+            result['warnings'] = errors
+        
+        return jsonify(result)
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 @app.route('/admin/clear-data', methods=['POST'])
 @admin_required
