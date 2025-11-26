@@ -714,7 +714,7 @@ def admin_dashboard():
 @app.route('/admin/upload', methods=['POST'])
 @admin_required
 def admin_upload():
-    """Handle CSV upload"""
+    """Handle CSV upload with optimized batch processing"""
     if 'csv_file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     
@@ -740,62 +740,81 @@ def admin_upload():
         conn = get_db()
         cursor = conn.cursor()
         
+        # Collect data for batch insert
+        items_batch = []
+        pickers_seen = set()
         rows_inserted = 0
         pickers_added = 0
-        errors = []
         
-        for row_num, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)
+        BATCH_SIZE = 1000  # Insert in batches of 1000
+        
+        for row in reader:
+            # Parse updated_at timestamp
+            updated_at_str = row.get('updated_at', '').strip()
+            if not updated_at_str:
+                continue
+            
             try:
-                # Parse updated_at timestamp
-                updated_at_str = row.get('updated_at', '').strip()
-                if not updated_at_str:
-                    continue
-                
+                updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
                 try:
-                    updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S')
+                    updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S.%f')
                 except ValueError:
-                    try:
-                        updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S.%f')
-                    except ValueError:
-                        continue
-                
-                # Get picker_id
-                picker_id = row.get('picker_ldap', '').strip()
-                if not picker_id:
                     continue
-                
-                # Insert item record
-                cursor.execute('''
+            
+            # Get picker_id
+            picker_id = row.get('picker_ldap', '').strip()
+            if not picker_id:
+                continue
+            
+            # Add to batch
+            items_batch.append((
+                row.get('source_warehouse', ''),
+                picker_id,
+                row.get('item_status', ''),
+                row.get('dispatch_by_date', ''),
+                row.get('external_picklist_id', ''),
+                row.get('location_bin_id', ''),
+                row.get('location_sequence', ''),
+                updated_at.strftime('%Y-%m-%d %H:%M:%S'),
+                file.filename
+            ))
+            
+            # Track unique pickers
+            pickers_seen.add(picker_id)
+            
+            # Insert batch when full
+            if len(items_batch) >= BATCH_SIZE:
+                cursor.executemany('''
                     INSERT INTO items (
                         source_warehouse, picker_id, item_status, dispatch_by_date,
                         external_picklist_id, location_bin_id, location_sequence,
                         updated_at, csv_file
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    row.get('source_warehouse', ''),
-                    picker_id,
-                    row.get('item_status', ''),
-                    row.get('dispatch_by_date', ''),
-                    row.get('external_picklist_id', ''),
-                    row.get('location_bin_id', ''),
-                    row.get('location_sequence', ''),
-                    updated_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    file.filename
-                ))
-                rows_inserted += 1
-                
-                # Auto-create picker user if doesn't exist
-                try:
-                    cursor.execute('INSERT INTO users (picker_id, password, role, password_changed) VALUES (?, ?, ?, ?)',
-                                  (picker_id, generate_password_hash('picker123'), 'picker', 0))
-                    pickers_added += 1
-                except:
-                    pass  # User already exists
-                    
-            except Exception as row_error:
-                if len(errors) < 5:  # Only keep first 5 errors
-                    errors.append(f"Row {row_num}: {str(row_error)}")
-                continue
+                ''', items_batch)
+                rows_inserted += len(items_batch)
+                items_batch = []
+        
+        # Insert remaining items
+        if items_batch:
+            cursor.executemany('''
+                INSERT INTO items (
+                    source_warehouse, picker_id, item_status, dispatch_by_date,
+                    external_picklist_id, location_bin_id, location_sequence,
+                    updated_at, csv_file
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', items_batch)
+            rows_inserted += len(items_batch)
+        
+        # Create picker users for all unique pickers
+        default_password = generate_password_hash('picker123')
+        for picker_id in pickers_seen:
+            try:
+                cursor.execute('INSERT INTO users (picker_id, password, role, password_changed) VALUES (?, ?, ?, ?)',
+                              (picker_id, default_password, 'picker', 0))
+                pickers_added += 1
+            except:
+                pass  # User already exists
         
         # Record the upload
         cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
@@ -804,17 +823,12 @@ def admin_upload():
         conn.commit()
         conn.close()
         
-        result = {
+        return jsonify({
             'success': True,
             'rows_inserted': rows_inserted,
             'pickers_added': pickers_added,
             'filename': file.filename
-        }
-        
-        if errors:
-            result['warnings'] = errors
-        
-        return jsonify(result)
+        })
         
     except Exception as e:
         import traceback
