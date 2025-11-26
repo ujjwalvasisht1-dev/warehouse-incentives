@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Warehouse Incentive System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .admin-header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+        .admin-header h1 {
+            color: #ffd700;
+        }
+        .admin-badge {
+            display: inline-block;
+            background: #ffd700;
+            color: #1a1a2e;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .upload-section {
+            background: #f8f9fa;
+            border: 2px dashed #667eea;
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            transition: all 0.3s;
+        }
+        .upload-section:hover {
+            border-color: #764ba2;
+            background: #f0f0ff;
+        }
+        .upload-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 15px;
+        }
+        .file-input-wrapper input[type="file"] {
+            font-size: 16px;
+            padding: 10px;
+        }
+        .upload-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        .upload-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .upload-result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        .upload-result.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        .upload-result.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card.admin-stat {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+        .recent-uploads {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .recent-uploads h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .upload-list {
+            list-style: none;
+            padding: 0;
+        }
+        .upload-list li {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+        }
+        .upload-list li:last-child {
+            border-bottom: none;
+        }
+        .danger-zone {
+            background: #fff5f5;
+            border: 2px solid #fc8181;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+        .danger-zone h3 {
+            color: #c53030;
+            margin-bottom: 15px;
+        }
+        .btn-danger {
+            background: #e53e3e;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .btn-danger:hover {
+            background: #c53030;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <div class="admin-header">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
+                <div>
+                    <span class="admin-badge">🔐 ADMIN</span>
+                    <h1>Admin Dashboard</h1>
+                </div>
+                <a href="{{ url_for('admin_logout') }}" class="btn btn-secondary btn-sm">Logout</a>
+            </div>
+        </div>
+        
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card admin-stat">
+                <div class="stat-label">Total Items</div>
+                <div class="stat-value">{{ total_items }}</div>
+            </div>
+            <div class="stat-card admin-stat">
+                <div class="stat-label">Unique Pickers (Data)</div>
+                <div class="stat-value">{{ total_pickers }}</div>
+            </div>
+            <div class="stat-card admin-stat">
+                <div class="stat-label">Registered Pickers</div>
+                <div class="stat-value">{{ registered_pickers }}</div>
+            </div>
+        </div>
+        
+        <!-- Upload Section -->
+        <div class="upload-section">
+            <h3>📤 Upload Picker Data (CSV)</h3>
+            <p style="color: #666; margin-bottom: 20px;">Upload CSV files with picker productivity data. New pickers will be auto-registered with password: <code>picker123</code></p>
+            
+            <form id="upload-form" enctype="multipart/form-data">
+                <div class="file-input-wrapper">
+                    <input type="file" id="csv-file" name="csv_file" accept=".csv" required>
+                </div>
+                <br><br>
+                <button type="submit" class="upload-btn" id="upload-btn">
+                    Upload & Process CSV
+                </button>
+            </form>
+            
+            <div class="upload-result" id="upload-result"></div>
+        </div>
+        
+        <!-- Recent Uploads -->
+        <div class="recent-uploads">
+            <h3>📋 Recent Uploads</h3>
+            {% if recent_uploads %}
+            <ul class="upload-list">
+                {% for upload in recent_uploads %}
+                <li>
+                    <span>{{ upload[0] }}</span>
+                    <span style="color: #888;">{{ upload[1] }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p style="color: #888;">No uploads yet</p>
+            {% endif %}
+        </div>
+        
+        <!-- Danger Zone -->
+        <div class="danger-zone">
+            <h3>⚠️ Danger Zone</h3>
+            <p style="color: #666; margin-bottom: 15px;">Clear all item data from the database. User accounts will be preserved.</p>
+            <button class="btn-danger" onclick="clearData()">Clear All Item Data</button>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('upload-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('csv-file');
+            const uploadBtn = document.getElementById('upload-btn');
+            const resultDiv = document.getElementById('upload-result');
+            
+            if (!fileInput.files[0]) {
+                alert('Please select a file');
+                return;
+            }
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            resultDiv.className = 'upload-result';
+            resultDiv.style.display = 'none';
+            
+            const formData = new FormData();
+            formData.append('csv_file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/admin/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.className = 'upload-result success';
+                    resultDiv.innerHTML = `
+                        <strong>✅ Upload Successful!</strong><br>
+                        File: ${data.filename}<br>
+                        Rows inserted: ${data.rows_inserted}<br>
+                        New pickers added: ${data.pickers_added}
+                    `;
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    resultDiv.className = 'upload-result error';
+                    resultDiv.innerHTML = `<strong>❌ Error:</strong> ${data.error}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'upload-result error';
+                resultDiv.innerHTML = `<strong>❌ Error:</strong> ${error.message}`;
+            }
+            
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload & Process CSV';
+        });
+        
+        async function clearData() {
+            if (!confirm('Are you sure you want to clear ALL item data? This cannot be undone!')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/admin/clear-data', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('All item data cleared successfully!');
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
+

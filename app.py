@@ -84,6 +84,15 @@ def supervisor_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def admin_required(f):
+    """Decorator to require admin role"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session or session.get('role') != 'admin':
+            return redirect(url_for('admin_login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route('/')
 def index():
     """Redirect to login"""
@@ -539,6 +548,180 @@ def supervisor_download():
         as_attachment=True,
         download_name=filename
     )
+
+# ==================== ADMIN ROUTES ====================
+
+@app.route('/admin')
+def admin_index():
+    """Redirect to admin login"""
+    return redirect(url_for('admin_login'))
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    """Admin login page"""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE picker_id = ? AND role = ?', (username, 'admin'))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user['password'], password):
+            session['user_id'] = user['picker_id']
+            session['role'] = user['role']
+            return redirect(url_for('admin_dashboard'))
+        else:
+            return render_template('admin_login.html', error='Invalid admin credentials')
+    
+    return render_template('admin_login.html')
+
+@app.route('/admin/logout')
+def admin_logout():
+    """Admin logout"""
+    session.clear()
+    return redirect(url_for('admin_login'))
+
+@app.route('/admin/dashboard')
+@admin_required
+def admin_dashboard():
+    """Admin dashboard"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Get stats
+    cursor.execute('SELECT COUNT(*) FROM items')
+    total_items = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(DISTINCT picker_id) FROM items')
+    total_pickers = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM users WHERE role = "picker"')
+    registered_pickers = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT filename, processed_at FROM processed_csvs ORDER BY processed_at DESC LIMIT 10')
+    recent_uploads = cursor.fetchall()
+    
+    conn.close()
+    
+    return render_template('admin_dashboard.html', 
+                          total_items=total_items,
+                          total_pickers=total_pickers,
+                          registered_pickers=registered_pickers,
+                          recent_uploads=recent_uploads)
+
+@app.route('/admin/upload', methods=['POST'])
+@admin_required
+def admin_upload():
+    """Handle CSV upload"""
+    if 'csv_file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['csv_file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not file.filename.endswith('.csv'):
+        return jsonify({'error': 'File must be a CSV'}), 400
+    
+    try:
+        # Read CSV content
+        content = file.read().decode('utf-8')
+        lines = content.strip().split('\n')
+        
+        if len(lines) < 2:
+            return jsonify({'error': 'CSV file is empty or has no data rows'}), 400
+        
+        # Parse header
+        import csv as csv_module
+        reader = csv_module.DictReader(lines)
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        rows_inserted = 0
+        pickers_added = 0
+        
+        for row in reader:
+            # Parse updated_at timestamp
+            try:
+                updated_at_str = row.get('updated_at', '').strip()
+                if not updated_at_str:
+                    continue
+                
+                try:
+                    updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    try:
+                        updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S.%f')
+                    except ValueError:
+                        continue
+            except:
+                continue
+            
+            # Get picker_id
+            picker_id = row.get('picker_ldap', '').strip()
+            if not picker_id:
+                continue
+            
+            # Insert item record
+            cursor.execute('''
+                INSERT INTO items (
+                    source_warehouse, picker_id, item_status, dispatch_by_date,
+                    external_picklist_id, location_bin_id, location_sequence,
+                    updated_at, csv_file
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                row.get('source_warehouse', ''),
+                picker_id,
+                row.get('item_status', ''),
+                row.get('dispatch_by_date', ''),
+                row.get('external_picklist_id', ''),
+                row.get('location_bin_id', ''),
+                row.get('location_sequence', ''),
+                updated_at,
+                file.filename
+            ))
+            rows_inserted += 1
+            
+            # Auto-create picker user if doesn't exist
+            try:
+                cursor.execute('INSERT INTO users (picker_id, password, role) VALUES (?, ?, ?)',
+                              (picker_id, generate_password_hash('picker123'), 'picker'))
+                pickers_added += 1
+            except:
+                pass  # User already exists
+        
+        # Record the upload
+        cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
+                      (file.filename, datetime.now()))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'rows_inserted': rows_inserted,
+            'pickers_added': pickers_added,
+            'filename': file.filename
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/admin/clear-data', methods=['POST'])
+@admin_required
+def admin_clear_data():
+    """Clear all item data (keeps users)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM items')
+    cursor.execute('DELETE FROM processed_csvs')
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': 'All item data cleared'})
 
 if __name__ == '__main__':
     init_db()

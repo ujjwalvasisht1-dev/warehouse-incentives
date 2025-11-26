@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - Warehouse Incentive System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .admin-login-box {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+        }
+        .admin-login-box h1 {
+            color: #ffd700;
+        }
+        .admin-login-box h2 {
+            color: #ccc;
+        }
+        .admin-login-box label {
+            color: #ddd;
+        }
+        .admin-login-box .btn-primary {
+            background: #ffd700;
+            color: #1a1a2e;
+        }
+        .admin-login-box .btn-primary:hover {
+            background: #ffaa00;
+        }
+        .admin-badge {
+            display: inline-block;
+            background: #ffd700;
+            color: #1a1a2e;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-box admin-login-box">
+            <span class="admin-badge">🔐 ADMIN ACCESS</span>
+            <h1>Warehouse Incentive System</h1>
+            <h2>Admin Login</h2>
+            
+            {% if error %}
+            <div class="error-message">{{ error }}</div>
+            {% endif %}
+            
+            <form method="POST" action="{{ url_for('admin_login') }}">
+                <div class="form-group">
+                    <label for="username">Admin Username</label>
+                    <input type="text" id="username" name="username" required autofocus>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Login as Admin</button>
+            </form>
+            
+            <div class="login-info" style="border-top-color: #333; color: #888;">
+                <p><a href="{{ url_for('login') }}" style="color: #87ceeb;">← Back to Picker/Supervisor Login</a></p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

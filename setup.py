@@ -90,6 +90,18 @@ def create_sample_users():
     except sqlite3.IntegrityError:
         print("Supervisor user already exists")
     
+    # Admin user (for data upload)
+    import os
+    admin_password = os.environ.get('ADMIN_PASSWORD', 'admin@warehouse2024')
+    try:
+        cursor.execute('''
+            INSERT INTO users (picker_id, password, role)
+            VALUES (?, ?, ?)
+        ''', ('admin', generate_password_hash(admin_password), 'admin'))
+        print("Created admin user: admin")
+    except sqlite3.IntegrityError:
+        print("Admin user already exists")
+    
     conn.commit()
     conn.close()
     print("Sample users created")
@@ -122,6 +134,9 @@ if __name__ == '__main__':
     print("  Picker ID: ca.3704873, Password: picker123")
     print("\nSupervisor:")
     print("  Picker ID: supervisor, Password: supervisor123")
+    print("\nAdmin (for CSV upload):")
+    print("  Username: admin, Password: admin@warehouse2024")
+    print("  Access at: /admin")
     print("=" * 50)
     print("\nTo start the application, run: python app.py")
     print("To process CSV files, run: python csv_processor.py")
