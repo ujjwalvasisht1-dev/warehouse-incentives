@@ -12,6 +12,7 @@
             <h1>Supervisor Dashboard</h1>
             <div class="header-actions">
                 <a href="{{ url_for('supervisor_download', filter=time_filter) }}" class="btn btn-secondary btn-sm">Download CSV</a>
+                <a href="{{ url_for('change_password_settings') }}" class="btn btn-secondary btn-sm">🔐 Change Password</a>
                 <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-sm">Logout</a>
             </div>
         </header>

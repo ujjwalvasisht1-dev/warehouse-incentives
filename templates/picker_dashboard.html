@@ -12,6 +12,7 @@
             <h1>Picker Dashboard</h1>
             <div class="header-actions">
                 <span class="picker-id">{{ picker_id }}</span>
+                <a href="{{ url_for('change_password_settings') }}" class="btn btn-secondary btn-sm">🔐 Change Password</a>
                 <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-sm">Logout</a>
             </div>
         </header>

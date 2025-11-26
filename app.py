@@ -33,9 +33,16 @@ def init_db():
             picker_id TEXT UNIQUE,
             password TEXT,
             role TEXT,
+            password_changed INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Add password_changed column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute('ALTER TABLE users ADD COLUMN password_changed INTEGER DEFAULT 0')
+    except:
+        pass  # Column already exists
     
     # Items table (stores all picking records)
     cursor.execute('''
@@ -115,6 +122,11 @@ def login():
             session['user_id'] = user['picker_id']
             session['role'] = user['role']
             
+            # Check if password needs to be changed (first login)
+            password_changed = user['password_changed'] if 'password_changed' in user.keys() else 0
+            if not password_changed and user['role'] in ['picker', 'supervisor']:
+                return redirect(url_for('change_password_first'))
+            
             if user['role'] == 'supervisor':
                 return redirect(url_for('supervisor_dashboard'))
             else:
@@ -129,6 +141,77 @@ def logout():
     """Logout"""
     session.clear()
     return redirect(url_for('login'))
+
+@app.route('/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password_first():
+    """Change password on first login"""
+    if request.method == 'POST':
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        
+        # Validation
+        if len(new_password) < 6:
+            return render_template('change_password.html', error='Password must be at least 6 characters')
+        
+        if new_password != confirm_password:
+            return render_template('change_password.html', error='Passwords do not match')
+        
+        # Update password
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+        ''', (generate_password_hash(new_password), session['user_id']))
+        conn.commit()
+        conn.close()
+        
+        # Redirect to appropriate dashboard
+        if session.get('role') == 'supervisor':
+            return redirect(url_for('supervisor_dashboard'))
+        else:
+            return redirect(url_for('picker_dashboard'))
+    
+    return render_template('change_password.html')
+
+@app.route('/settings/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password_settings():
+    """Change password from settings (anytime)"""
+    if request.method == 'POST':
+        current_password = request.form.get('current_password', '')
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        
+        # Verify current password
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('SELECT password FROM users WHERE picker_id = ?', (session['user_id'],))
+        user = cursor.fetchone()
+        
+        if not user or not check_password_hash(user['password'], current_password):
+            conn.close()
+            return render_template('change_password_settings.html', error='Current password is incorrect')
+        
+        # Validation
+        if len(new_password) < 6:
+            conn.close()
+            return render_template('change_password_settings.html', error='New password must be at least 6 characters')
+        
+        if new_password != confirm_password:
+            conn.close()
+            return render_template('change_password_settings.html', error='Passwords do not match')
+        
+        # Update password
+        cursor.execute('''
+            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+        ''', (generate_password_hash(new_password), session['user_id']))
+        conn.commit()
+        conn.close()
+        
+        return render_template('change_password_settings.html', success='Password changed successfully!')
+    
+    return render_template('change_password_settings.html')
 
 @app.route('/picker/dashboard')
 @login_required
