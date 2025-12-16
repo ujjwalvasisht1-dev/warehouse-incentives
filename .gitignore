@@ -9,7 +9,6 @@ venv/
 .venv/
 
 # Database
-*.db
 *.sqlite3
 
 # CSV data files (contain sensitive picker data)
