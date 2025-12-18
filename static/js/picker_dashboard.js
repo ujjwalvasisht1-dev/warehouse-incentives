@@ -176,22 +176,22 @@ function updateIncentiveBanner(rank, totalPickers, itemsToNext, leaderboard) {
             emoji1 = '💪';
             emoji2 = '🚀';
             const itemsToTop3 = getItemsToRank(leaderboard, rank, 3);
-            message = `Great job! You're in TOP 10! Pick ${itemsToTop3} more items to enter TOP 3 and win ₹500!`;
+            message = `Great job! You're in TOP 10! Pick ${itemsToTop3} more items to enter TOP 3!`;
         } else if (rank <= 25) {
             emoji1 = '⚡';
             emoji2 = '📈';
             const itemsToTop10 = getItemsToRank(leaderboard, rank, 10);
-            message = `You're making progress! Pick ${itemsToTop10} more items to enter TOP 10 for ₹300 bonus!`;
+            message = `You're making progress! Pick ${itemsToTop10} more items to enter TOP 10!`;
         } else if (rank <= 50) {
             emoji1 = '🎯';
             emoji2 = '💫';
             const itemsToTop25 = getItemsToRank(leaderboard, rank, 25);
-            message = `Keep pushing! Pick ${itemsToTop25} more items to enter TOP 25 for ₹150 bonus!`;
+            message = `Keep pushing! Pick ${itemsToTop25} more items to enter TOP 25!`;
         } else {
             emoji1 = '🌟';
             emoji2 = '💪';
             const itemsToTop50 = getItemsToRank(leaderboard, rank, 50);
-            message = `Every item counts! Pick ${itemsToTop50} more items to enter TOP 50 and earn rewards!`;
+            message = `Every item counts! Pick ${itemsToTop50} more items to enter TOP 50!`;
         }
         
         messageEl.innerHTML = `
