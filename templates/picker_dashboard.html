@@ -11,6 +11,9 @@
         <header class="dashboard-header">
             <h1>Picker Dashboard</h1>
             <div class="header-actions">
+                {% if cohort %}
+                <span class="cohort-badge">Cohort {{ cohort }}</span>
+                {% endif %}
                 <span class="picker-id">{{ picker_id }}</span>
                 <a href="{{ url_for('change_password_settings') }}" class="btn btn-secondary btn-sm">🔐 Change Password</a>
                 <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-sm">Logout</a>
@@ -128,7 +131,7 @@
         
         <!-- Leaderboard Table -->
         <div class="leaderboard-section">
-            <h2>Leaderboard</h2>
+            <h2>{% if cohort %}Cohort {{ cohort }} {% endif %}Leaderboard</h2>
             <div class="rankings-table-container">
                 <table class="rankings-table">
                     <thead>

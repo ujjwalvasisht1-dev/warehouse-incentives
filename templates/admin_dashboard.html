@@ -168,6 +168,14 @@
                 <div class="stat-label">Registered Pickers</div>
                 <div class="stat-value">{{ registered_pickers }}</div>
             </div>
+            <div class="stat-card admin-stat" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                <div class="stat-label">Active Cohorts</div>
+                <div class="stat-value">{{ total_cohorts }}</div>
+            </div>
+            <div class="stat-card admin-stat" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                <div class="stat-label">Pickers in Cohorts</div>
+                <div class="stat-value">{{ pickers_in_cohorts }}</div>
+            </div>
         </div>
         
         <!-- Upload Section -->
@@ -186,6 +194,27 @@
             </form>
             
             <div class="upload-result" id="upload-result"></div>
+        </div>
+        
+        <!-- Cohort Upload Section -->
+        <div class="upload-section" style="border-color: #f093fb; margin-top: 20px;">
+            <h3>👥 Upload Picker Cohorts (CSV)</h3>
+            <p style="color: #666; margin-bottom: 20px;">
+                Upload a CSV with cohort columns (Cohort 1, Cohort 2, etc.) containing picker IDs.<br>
+                Each picker will be assigned to their cohort and see only cohort-specific rankings.
+            </p>
+            
+            <form id="cohort-upload-form" enctype="multipart/form-data">
+                <div class="file-input-wrapper">
+                    <input type="file" id="cohort-file" name="cohort_file" accept=".csv" required>
+                </div>
+                <br><br>
+                <button type="submit" class="upload-btn" id="cohort-upload-btn" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                    Upload Cohorts
+                </button>
+            </form>
+            
+            <div class="upload-result" id="cohort-upload-result"></div>
         </div>
         
         <!-- Recent Uploads -->
@@ -315,6 +344,68 @@
                 alert('Error: ' + error.message);
             }
         }
+        
+        // Cohort Upload Handler
+        document.getElementById('cohort-upload-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('cohort-file');
+            const uploadBtn = document.getElementById('cohort-upload-btn');
+            const resultDiv = document.getElementById('cohort-upload-result');
+            
+            if (!fileInput.files[0]) {
+                alert('Please select a file');
+                return;
+            }
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            resultDiv.className = 'upload-result';
+            resultDiv.innerHTML = '<strong>⏳ Processing cohorts...</strong>';
+            resultDiv.style.display = 'block';
+            resultDiv.style.background = '#fff3cd';
+            resultDiv.style.color = '#856404';
+            
+            const formData = new FormData();
+            formData.append('cohort_file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/admin/upload-cohorts', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.className = 'upload-result success';
+                    let cohortSummary = '';
+                    if (data.cohort_summary) {
+                        cohortSummary = '<br><br><strong>Cohort Summary:</strong><br>';
+                        for (const [cohort, count] of Object.entries(data.cohort_summary)) {
+                            cohortSummary += `Cohort ${cohort}: ${count} pickers<br>`;
+                        }
+                    }
+                    resultDiv.innerHTML = `
+                        <strong>✅ Cohorts Uploaded Successfully!</strong><br>
+                        Total pickers: ${data.total_pickers}<br>
+                        Cohorts: ${data.cohorts}<br>
+                        New users created: ${data.created}<br>
+                        Existing users updated: ${data.updated}
+                        ${cohortSummary}
+                    `;
+                } else {
+                    resultDiv.className = 'upload-result error';
+                    resultDiv.innerHTML = `<strong>❌ Error:</strong> ${data.error}`;
+                }
+            } catch (error) {
+                resultDiv.className = 'upload-result error';
+                resultDiv.innerHTML = `<strong>❌ Network Error:</strong> ${error.message}`;
+            }
+            
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload Cohorts';
+        });
     </script>
 </body>
 </html>
