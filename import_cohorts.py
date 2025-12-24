@@ -9,7 +9,7 @@ from werkzeug.security import generate_password_hash
 import os
 
 DATABASE = 'incentives.db'
-DEFAULT_PASSWORD = 'picker123'
+# Password = picker_id (same as username)
 
 def import_cohorts(csv_file):
     """Import cohorts from CSV file"""
@@ -58,7 +58,7 @@ def import_cohorts(csv_file):
         print(f"Found {len(picker_cohorts)} pickers across all cohorts")
         
         # Create/update users with cohort assignments
-        default_pwd_hash = generate_password_hash(DEFAULT_PASSWORD)
+        # Password = picker_id (same as username)
         created = 0
         updated = 0
         
@@ -68,17 +68,16 @@ def import_cohorts(csv_file):
             existing = cursor.fetchone()
             
             if existing:
-                # Update cohort if different
-                if existing[1] != cohort_num:
-                    cursor.execute('UPDATE users SET cohort = ? WHERE LOWER(picker_id) = LOWER(?)', 
-                                 (cohort_num, picker_id))
-                    updated += 1
+                # Update cohort and password (password = picker_id)
+                cursor.execute('UPDATE users SET cohort = ?, password = ? WHERE LOWER(picker_id) = LOWER(?)', 
+                             (cohort_num, generate_password_hash(picker_id), picker_id))
+                updated += 1
             else:
-                # Create new user
+                # Create new user with password = picker_id
                 cursor.execute('''
                     INSERT INTO users (picker_id, password, role, cohort, password_changed)
                     VALUES (?, ?, ?, ?, 0)
-                ''', (picker_id, default_pwd_hash, 'picker', cohort_num))
+                ''', (picker_id, generate_password_hash(picker_id), 'picker', cohort_num))
                 created += 1
         
         conn.commit()
@@ -104,8 +103,9 @@ def import_cohorts(csv_file):
     
     conn.close()
     print("\nCohort import complete!")
-    print(f"\nDefault login credentials for all pickers:")
-    print(f"  Password: {DEFAULT_PASSWORD}")
+    print(f"\nLogin credentials for all pickers:")
+    print(f"  Username: <picker_id> (e.g., Ca.3099373)")
+    print(f"  Password: <same as username>")
     print("\nPickers will be prompted to change password on first login.")
 
 def list_cohorts():

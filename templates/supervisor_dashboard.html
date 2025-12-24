@@ -5,35 +5,122 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Supervisor Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .cohort-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 12px;
+        }
+        
+        .cohort-tab {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .cohort-tab:hover {
+            background: rgba(255,255,255,0.2);
+            transform: translateY(-2px);
+        }
+        
+        .cohort-tab.active {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+        }
+        
+        .cohort-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 15px;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            border-radius: 12px;
+            color: white;
+        }
+        
+        .cohort-header h2 {
+            margin: 0;
+            font-size: 24px;
+        }
+        
+        .cohort-stats {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .cohort-stat {
+            text-align: center;
+        }
+        
+        .cohort-stat-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+        
+        .cohort-stat-label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+    </style>
 </head>
 <body>
     <div class="dashboard-container">
         <header class="dashboard-header">
             <h1>Supervisor Dashboard</h1>
             <div class="header-actions">
-                <a href="{{ url_for('supervisor_download', filter=time_filter) }}" class="btn btn-secondary btn-sm">Download CSV</a>
+                <a href="#" id="download-link" class="btn btn-secondary btn-sm">Download CSV</a>
                 <a href="{{ url_for('change_password_settings') }}" class="btn btn-secondary btn-sm">🔐 Change Password</a>
                 <a href="{{ url_for('logout') }}" class="btn btn-secondary btn-sm">Logout</a>
             </div>
         </header>
         
+        <!-- Cohort Tabs -->
+        <div class="cohort-tabs">
+            <button class="cohort-tab active" data-cohort="1">Cohort 1</button>
+            <button class="cohort-tab" data-cohort="2">Cohort 2</button>
+            <button class="cohort-tab" data-cohort="3">Cohort 3</button>
+            <button class="cohort-tab" data-cohort="4">Cohort 4</button>
+            <button class="cohort-tab" data-cohort="5">Cohort 5</button>
+            <button class="cohort-tab" data-cohort="6">Cohort 6</button>
+            <button class="cohort-tab" data-cohort="7">Cohort 7</button>
+            <button class="cohort-tab" data-cohort="8">Cohort 8</button>
+            <button class="cohort-tab" data-cohort="9">Cohort 9</button>
+            <button class="cohort-tab" data-cohort="10">Cohort 10</button>
+            <button class="cohort-tab" data-cohort="11">Cohort 11</button>
+        </div>
+        
+        <!-- Cohort Header -->
+        <div class="cohort-header" id="cohort-header">
+            <h2 id="cohort-title">Cohort 1 Rankings</h2>
+            <div class="cohort-stats">
+                <div class="cohort-stat">
+                    <div class="cohort-stat-value" id="cohort-pickers">-</div>
+                    <div class="cohort-stat-label">Pickers</div>
+                </div>
+                <div class="cohort-stat">
+                    <div class="cohort-stat-value" id="cohort-avg">-</div>
+                    <div class="cohort-stat-label">Avg Score</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Time Filter -->
         <div class="filter-tabs">
-            <button class="filter-btn" data-filter="today">Today</button>
+            <button class="filter-btn active" data-filter="today">Today</button>
             <button class="filter-btn" data-filter="yesterday">Yesterday</button>
             <button class="filter-btn" data-filter="this_week">This Week</button>
             <button class="filter-btn" data-filter="last_week">Last Week</button>
             <button class="filter-btn" data-filter="all_time">All Time</button>
-        </div>
-        
-        <div class="summary-stats">
-            <div class="summary-item">
-                <span class="summary-label">Total Pickers:</span>
-                <span class="summary-value" id="total-pickers">-</span>
-            </div>
-            <div class="summary-item">
-                <span class="summary-label">Daily Average:</span>
-                <span class="summary-value" id="daily-avg">-</span>
-            </div>
         </div>
         
         <div class="rankings-table-container">
@@ -52,7 +139,7 @@
                 </thead>
                 <tbody id="rankings-body">
                     <tr>
-                        <td colspan="7" class="loading">Loading rankings...</td>
+                        <td colspan="8" class="loading">Loading rankings...</td>
                     </tr>
                 </tbody>
             </table>
@@ -73,4 +160,3 @@
     <script src="{{ url_for('static', filename='js/supervisor_dashboard.js') }}"></script>
 </body>
 </html>
-

@@ -1,16 +1,26 @@
 // Supervisor Dashboard JavaScript
 
 let currentFilter = 'today';
+let currentCohort = 1;
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function() {
-    // Set active filter button
+    // Cohort tab setup
+    const cohortTabs = document.querySelectorAll('.cohort-tab');
+    cohortTabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+            currentCohort = parseInt(this.dataset.cohort);
+            cohortTabs.forEach(t => t.classList.remove('active'));
+            this.classList.add('active');
+            updateCohortHeader();
+            loadRankings();
+            updateDownloadLink();
+        });
+    });
+    
+    // Time filter setup
     const filterButtons = document.querySelectorAll('.filter-btn');
     filterButtons.forEach(btn => {
-        if (btn.dataset.filter === currentFilter) {
-            btn.classList.add('active');
-        }
-        
         btn.addEventListener('click', function() {
             currentFilter = this.dataset.filter;
             filterButtons.forEach(b => b.classList.remove('active'));
@@ -36,7 +46,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Load initial rankings
+    // Initial load
+    updateCohortHeader();
     loadRankings();
     updateDownloadLink();
     
@@ -44,29 +55,36 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(loadRankings, 30000);
 });
 
+function updateCohortHeader() {
+    const title = document.getElementById('cohort-title');
+    if (title) {
+        title.textContent = `Cohort ${currentCohort} Rankings`;
+    }
+}
+
 function updateDownloadLink() {
-    const downloadLink = document.querySelector('a[href*="supervisor/download"]');
+    const downloadLink = document.getElementById('download-link');
     if (downloadLink) {
-        downloadLink.href = `/supervisor/download?filter=${currentFilter}`;
+        downloadLink.href = `/supervisor/download?filter=${currentFilter}&cohort=${currentCohort}`;
     }
 }
 
 function loadRankings() {
     const tbody = document.getElementById('rankings-body');
     if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading rankings...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="loading">Loading rankings...</td></tr>';
     }
     
-    fetch(`/supervisor/api/rankings?filter=${currentFilter}`)
+    fetch(`/supervisor/api/rankings?filter=${currentFilter}&cohort=${currentCohort}`)
         .then(response => response.json())
         .then(data => {
             updateRankingsTable(data);
-            updateSummary(data);
+            updateCohortStats(data);
         })
         .catch(error => {
             console.error('Error loading rankings:', error);
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="7" class="loading">Error loading data. Please refresh.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="loading">Error loading data. Please refresh.</td></tr>';
             }
         });
 }
@@ -75,8 +93,8 @@ function updateRankingsTable(data) {
     const tbody = document.getElementById('rankings-body');
     if (!tbody) return;
     
-    if (data.rankings.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="loading">No data available</td></tr>';
+    if (!data.rankings || data.rankings.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="loading">No data available for this cohort</td></tr>';
         return;
     }
     
@@ -94,9 +112,16 @@ function updateRankingsTable(data) {
     `).join('');
 }
 
-function updateSummary(data) {
-    document.getElementById('total-pickers').textContent = data.total_pickers || 0;
-    document.getElementById('daily-avg').textContent = data.daily_avg || '-';
+function updateCohortStats(data) {
+    const pickersEl = document.getElementById('cohort-pickers');
+    const avgEl = document.getElementById('cohort-avg');
+    
+    if (pickersEl) {
+        pickersEl.textContent = data.total_pickers || 0;
+    }
+    if (avgEl) {
+        avgEl.textContent = data.daily_avg || '-';
+    }
 }
 
 function getStatusLabel(color) {
@@ -144,6 +169,8 @@ function viewPickerDetails(pickerId) {
                 picklists[picklistId].forEach((item, idx) => {
                     if (idx === 0) {
                         html += `<tr><td rowspan="${picklists[picklistId].length}">${picklistId}</td>`;
+                    } else {
+                        html += '<tr>';
                     }
                     html += `<td>${item.location_bin_id}</td>`;
                     html += `<td><span class="rank-badge ${getStatusColorForItem(item.item_status)}">${item.item_status}</span></td>`;
@@ -165,4 +192,3 @@ function getStatusColorForItem(status) {
     if (status === 'ITEM_NOT_FOUND') return 'red';
     return 'yellow';
 }
-

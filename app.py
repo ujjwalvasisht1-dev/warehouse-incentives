@@ -477,8 +477,14 @@ def supervisor_dashboard():
 @app.route('/supervisor/api/rankings')
 @supervisor_required
 def supervisor_api_rankings():
-    """API endpoint for supervisor rankings"""
+    """API endpoint for supervisor rankings - filtered by cohort"""
     time_filter = request.args.get('filter', 'today')
+    cohort = request.args.get('cohort', '1')
+    
+    try:
+        cohort = int(cohort)
+    except ValueError:
+        cohort = 1
     
     # Calculate date range
     now = datetime.now()
@@ -513,33 +519,52 @@ def supervisor_api_rankings():
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
-    # Get all pickers' stats
-    cursor.execute('''
+    # Get picker IDs for the selected cohort
+    cursor.execute('SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
+    cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
+    
+    if not cohort_picker_ids:
+        conn.close()
+        return jsonify({
+            'rankings': [],
+            'daily_avg': 0,
+            'total_pickers': 0,
+            'cohort': cohort
+        })
+    
+    # Create placeholders for IN clause
+    placeholders = ','.join(['?' for _ in cohort_picker_ids])
+    
+    # Get stats for cohort pickers only
+    query = f'''
         SELECT 
             picker_id,
             COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
             COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
             COUNT(DISTINCT external_picklist_id) as unique_picklists
         FROM items
-        WHERE updated_at >= ? AND updated_at <= ?
+        WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
         GROUP BY LOWER(picker_id)
         ORDER BY items_picked DESC
-    ''', (start_str, end_str))
+    '''
+    params = [start_str, end_str] + cohort_picker_ids
+    cursor.execute(query, params)
     
     pickers = cursor.fetchall()
     
-    # Calculate daily average (for all filters)
-    cursor.execute('''
+    # Calculate cohort average
+    avg_query = f'''
         SELECT AVG(score) as avg_score
         FROM (
             SELECT 
                 LOWER(picker_id) as picker,
                 COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
             FROM items
-            WHERE updated_at >= ? AND updated_at <= ?
+            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
             GROUP BY LOWER(picker_id)
         )
-    ''', (start_str, end_str))
+    '''
+    cursor.execute(avg_query, params)
     avg_result = cursor.fetchone()
     daily_avg = avg_result['avg_score'] if avg_result and avg_result['avg_score'] else 0
     
@@ -572,7 +597,8 @@ def supervisor_api_rankings():
     return jsonify({
         'rankings': rankings,
         'daily_avg': round(daily_avg, 2),
-        'total_pickers': len(rankings)
+        'total_pickers': len(rankings),
+        'cohort': cohort
     })
 
 @app.route('/supervisor/api/picker/<picker_id>')
@@ -637,8 +663,14 @@ def supervisor_api_picker_detail(picker_id):
 @app.route('/supervisor/download')
 @supervisor_required
 def supervisor_download():
-    """Download CSV report"""
+    """Download CSV report - filtered by cohort"""
     time_filter = request.args.get('filter', 'today')
+    cohort = request.args.get('cohort', '1')
+    
+    try:
+        cohort = int(cohort)
+    except ValueError:
+        cohort = 1
     
     # Calculate date range
     now = datetime.now()
@@ -673,18 +705,37 @@ def supervisor_download():
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
-    cursor.execute('''
-        SELECT 
-            picker_id,
-            COUNT(DISTINCT external_picklist_id) as unique_picklists,
-            COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-            COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-            COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-        FROM items
-        WHERE updated_at >= ? AND updated_at <= ?
-        GROUP BY LOWER(picker_id)
-        ORDER BY score DESC
-    ''', (start_str, end_str))
+    # Get picker IDs for the selected cohort
+    cursor.execute('SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
+    cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
+    
+    if cohort_picker_ids:
+        placeholders = ','.join(['?' for _ in cohort_picker_ids])
+        query = f'''
+            SELECT 
+                picker_id,
+                COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+            FROM items
+            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+            GROUP BY LOWER(picker_id)
+            ORDER BY score DESC
+        '''
+        params = [start_str, end_str] + cohort_picker_ids
+        cursor.execute(query, params)
+    else:
+        cursor.execute('''
+            SELECT 
+                picker_id,
+                COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+            FROM items
+            WHERE 1=0
+        ''')
     
     rows = cursor.fetchall()
     conn.close()
@@ -698,7 +749,7 @@ def supervisor_download():
         writer.writerow([idx, row['picker_id'], row['unique_picklists'], row['items_picked'], row['items_lost'], row['score']])
     
     output.seek(0)
-    filename = f'picker_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+    filename = f'cohort{cohort}_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
     
     return send_file(
         io.BytesIO(output.getvalue().encode()),
@@ -963,7 +1014,7 @@ def admin_upload_cohorts():
         cursor = conn.cursor()
         
         # Create/update users with cohort assignments
-        default_pwd_hash = generate_password_hash('picker123')
+        # Password = picker_id (same as username)
         created = 0
         updated = 0
         
@@ -973,17 +1024,16 @@ def admin_upload_cohorts():
             existing = cursor.fetchone()
             
             if existing:
-                # Update cohort if different
-                if existing[1] != cohort_num:
-                    cursor.execute('UPDATE users SET cohort = ? WHERE LOWER(picker_id) = LOWER(?)', 
-                                 (cohort_num, picker_id))
-                    updated += 1
+                # Update cohort and password (password = picker_id)
+                cursor.execute('UPDATE users SET cohort = ?, password = ? WHERE LOWER(picker_id) = LOWER(?)', 
+                             (cohort_num, generate_password_hash(picker_id), picker_id))
+                updated += 1
             else:
-                # Create new user
+                # Create new user with password = picker_id
                 cursor.execute('''
                     INSERT INTO users (picker_id, password, role, cohort, password_changed)
                     VALUES (?, ?, ?, ?, 0)
-                ''', (picker_id, default_pwd_hash, 'picker', cohort_num))
+                ''', (picker_id, generate_password_hash(picker_id), 'picker', cohort_num))
                 created += 1
         
         conn.commit()
