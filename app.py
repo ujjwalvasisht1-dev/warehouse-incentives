@@ -1001,7 +1001,11 @@ def admin_upload():
         rows_inserted = 0
         pickers_added = 0
         
-        BATCH_SIZE = 1000  # Insert in batches of 1000
+        BATCH_SIZE = 500  # Smaller batches for reliability
+        
+        # Import execute_values for faster PostgreSQL inserts
+        if USE_POSTGRES:
+            from psycopg2.extras import execute_values
         
         for row in reader:
             # Parse updated_at timestamp
@@ -1038,15 +1042,15 @@ def admin_upload():
             # Track unique pickers
             pickers_seen.add(picker_id)
             
-            # Insert batch when full
+            # Insert batch when full and COMMIT immediately
             if len(items_batch) >= BATCH_SIZE:
                 if USE_POSTGRES:
-                    cursor.executemany('''
+                    execute_values(cursor, '''
                         INSERT INTO items (
                             source_warehouse, picker_id, item_status, dispatch_by_date,
                             external_picklist_id, location_bin_id, location_sequence,
                             updated_at, csv_file
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES %s
                     ''', items_batch)
                 else:
                     cursor.executemany('''
@@ -1056,18 +1060,19 @@ def admin_upload():
                             updated_at, csv_file
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', items_batch)
+                conn.commit()  # Commit after each batch
                 rows_inserted += len(items_batch)
                 items_batch = []
         
         # Insert remaining items
         if items_batch:
             if USE_POSTGRES:
-                cursor.executemany('''
+                execute_values(cursor, '''
                     INSERT INTO items (
                         source_warehouse, picker_id, item_status, dispatch_by_date,
                         external_picklist_id, location_bin_id, location_sequence,
                         updated_at, csv_file
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES %s
                 ''', items_batch)
             else:
                 cursor.executemany('''
@@ -1077,6 +1082,7 @@ def admin_upload():
                         updated_at, csv_file
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', items_batch)
+            conn.commit()
             rows_inserted += len(items_batch)
         
         # Create picker users for all unique pickers (only if they don't exist)

@@ -10,7 +10,7 @@ services:
     runtime: python
     pythonVersion: "3.11.0"
     buildCommand: pip install -r requirements.txt && python setup.py
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 300 --workers 1 --threads 4
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
