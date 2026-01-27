@@ -1,12 +1,21 @@
+databases:
+  - name: warehouse-db
+    plan: free
+    databaseName: warehouse_incentives
+    user: warehouse_user
+
 services:
   - type: web
     name: warehouse-incentives
     runtime: python
     buildCommand: pip install -r requirements.txt && python setup.py
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
       - key: SECRET_KEY
         generateValue: true
-
+      - key: DATABASE_URL
+        fromDatabase:
+          name: warehouse-db
+          property: connectionString

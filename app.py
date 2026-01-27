@@ -1,11 +1,25 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
-import sqlite3
 import os
 import csv
 import io
 from functools import wraps
+
+# Database setup - PostgreSQL for production, SQLite for local dev
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    # PostgreSQL (Render)
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    USE_POSTGRES = True
+    # Fix for Render's postgres:// vs postgresql://
+    if DATABASE_URL.startswith('postgres://'):
+        DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+else:
+    # SQLite (local development)
+    import sqlite3
+    USE_POSTGRES = False
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
@@ -18,65 +32,121 @@ os.makedirs(app.config['CSV_UPLOAD_FOLDER'], exist_ok=True)
 
 def get_db():
     """Get database connection"""
-    conn = sqlite3.connect(app.config['DATABASE'])
-    conn.row_factory = sqlite3.Row
-    return conn
+    if USE_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        return conn
+    else:
+        conn = sqlite3.connect(app.config['DATABASE'])
+        conn.row_factory = sqlite3.Row
+        return conn
+
+def execute_query(cursor, query, params=None):
+    """Execute query with proper parameter placeholder"""
+    if USE_POSTGRES:
+        # Convert ? to %s for PostgreSQL
+        query = query.replace('?', '%s')
+    if params:
+        cursor.execute(query, params)
+    else:
+        cursor.execute(query)
 
 def init_db():
     """Initialize database with tables"""
     conn = get_db()
     cursor = conn.cursor()
     
-    # Users table (pickers and supervisors)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            picker_id TEXT UNIQUE,
-            password TEXT,
-            role TEXT,
-            cohort INTEGER DEFAULT NULL,
-            password_changed INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Add password_changed column if it doesn't exist (for existing databases)
-    try:
-        cursor.execute('ALTER TABLE users ADD COLUMN password_changed INTEGER DEFAULT 0')
-    except:
-        pass  # Column already exists
-    
-    # Add cohort column if it doesn't exist (for existing databases)
-    try:
-        cursor.execute('ALTER TABLE users ADD COLUMN cohort INTEGER DEFAULT NULL')
-    except:
-        pass  # Column already exists
-    
-    # Items table (stores all picking records)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_warehouse TEXT,
-            picker_id TEXT,
-            item_status TEXT,
-            dispatch_by_date TIMESTAMP,
-            external_picklist_id TEXT,
-            location_bin_id TEXT,
-            location_sequence TEXT,
-            updated_at TIMESTAMP,
-            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            csv_file TEXT
-        )
-    ''')
-    
-    # Processed CSV files tracking
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS processed_csvs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT UNIQUE,
-            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    if USE_POSTGRES:
+        # PostgreSQL schema
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                picker_id TEXT UNIQUE,
+                password TEXT,
+                role TEXT,
+                cohort INTEGER DEFAULT NULL,
+                password_changed INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS items (
+                id SERIAL PRIMARY KEY,
+                source_warehouse TEXT,
+                picker_id TEXT,
+                item_status TEXT,
+                dispatch_by_date TIMESTAMP,
+                external_picklist_id TEXT,
+                location_bin_id TEXT,
+                location_sequence TEXT,
+                updated_at TIMESTAMP,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                csv_file TEXT
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS processed_csvs (
+                id SERIAL PRIMARY KEY,
+                filename TEXT UNIQUE,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Create indexes for better performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_items_picker_id ON items(picker_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_items_updated_at ON items(updated_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_items_picker_updated ON items(picker_id, updated_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_cohort ON users(cohort)')
+        
+    else:
+        # SQLite schema (existing)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                picker_id TEXT UNIQUE,
+                password TEXT,
+                role TEXT,
+                cohort INTEGER DEFAULT NULL,
+                password_changed INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Add columns if they don't exist (for existing databases)
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN password_changed INTEGER DEFAULT 0')
+        except:
+            pass
+        
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN cohort INTEGER DEFAULT NULL')
+        except:
+            pass
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_warehouse TEXT,
+                picker_id TEXT,
+                item_status TEXT,
+                dispatch_by_date TIMESTAMP,
+                external_picklist_id TEXT,
+                location_bin_id TEXT,
+                location_sequence TEXT,
+                updated_at TIMESTAMP,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                csv_file TEXT
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS processed_csvs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT UNIQUE,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
     
     conn.commit()
     conn.close()
@@ -122,7 +192,7 @@ def login():
         
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE picker_id = ?', (picker_id,))
+        execute_query(cursor, 'SELECT * FROM users WHERE picker_id = ?', (picker_id,))
         user = cursor.fetchone()
         conn.close()
         
@@ -178,15 +248,9 @@ def change_password_first():
         # Update password
         conn = get_db()
         cursor = conn.cursor()
-        try:
-            cursor.execute('''
-                UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
-            ''', (generate_password_hash(new_password), session['user_id']))
-        except:
-            # Fallback if password_changed column doesn't exist
-            cursor.execute('''
-                UPDATE users SET password = ? WHERE picker_id = ?
-            ''', (generate_password_hash(new_password), session['user_id']))
+        execute_query(cursor, '''
+            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+        ''', (generate_password_hash(new_password), session['user_id']))
         conn.commit()
         conn.close()
         
@@ -210,7 +274,7 @@ def change_password_settings():
         # Verify current password
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT password FROM users WHERE picker_id = ?', (session['user_id'],))
+        execute_query(cursor, 'SELECT password FROM users WHERE picker_id = ?', (session['user_id'],))
         user = cursor.fetchone()
         
         if not user or not check_password_hash(user['password'], current_password):
@@ -227,14 +291,9 @@ def change_password_settings():
             return render_template('change_password_settings.html', error='Passwords do not match')
         
         # Update password
-        try:
-            cursor.execute('''
-                UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
-            ''', (generate_password_hash(new_password), session['user_id']))
-        except:
-            cursor.execute('''
-                UPDATE users SET password = ? WHERE picker_id = ?
-            ''', (generate_password_hash(new_password), session['user_id']))
+        execute_query(cursor, '''
+            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+        ''', (generate_password_hash(new_password), session['user_id']))
         conn.commit()
         conn.close()
         
@@ -298,15 +357,18 @@ def picker_api_stats():
     conn = get_db()
     cursor = conn.cursor()
     
+    start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
+    end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
+    
     # Get picker stats (case-insensitive match)
-    cursor.execute('''
+    execute_query(cursor, '''
         SELECT 
             COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
             COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
             COUNT(DISTINCT external_picklist_id) as unique_picklists
         FROM items
         WHERE LOWER(picker_id) = LOWER(?) AND updated_at >= ? AND updated_at <= ?
-    ''', (picker_id, start_date.strftime('%Y-%m-%d %H:%M:%S'), end_date.strftime('%Y-%m-%d %H:%M:%S')))
+    ''', (picker_id, start_str, end_str))
     
     stats = cursor.fetchone()
     items_picked = stats['items_picked'] if stats else 0
@@ -317,31 +379,46 @@ def picker_api_stats():
     # Get cohort picker IDs if user has a cohort
     cohort_picker_ids = []
     if cohort:
-        cursor.execute('SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
+        execute_query(cursor, 'SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
         cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
     
     # Get all pickers' scores for ranking (with items picked, lost, and unique picklists)
     # Filter by cohort if the user belongs to a cohort
     if cohort and cohort_picker_ids:
-        # Create placeholders for IN clause
-        placeholders = ','.join(['?' for _ in cohort_picker_ids])
-        query = f'''
-            SELECT 
-                picker_id,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-                COUNT(DISTINCT external_picklist_id) as unique_picklists,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-            FROM items
-            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
-            GROUP BY LOWER(picker_id)
-            ORDER BY score DESC
-        '''
-        params = [start_date.strftime('%Y-%m-%d %H:%M:%S'), end_date.strftime('%Y-%m-%d %H:%M:%S')] + cohort_picker_ids
-        cursor.execute(query, params)
+        # For PostgreSQL, we need to use ANY instead of IN with array
+        if USE_POSTGRES:
+            query = '''
+                SELECT 
+                    picker_id,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                    COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                    COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                FROM items
+                WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
+                GROUP BY LOWER(picker_id), picker_id
+                ORDER BY score DESC
+            '''
+            cursor.execute(query, (start_str, end_str, cohort_picker_ids))
+        else:
+            placeholders = ','.join(['?' for _ in cohort_picker_ids])
+            query = f'''
+                SELECT 
+                    picker_id,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                    COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                    COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                FROM items
+                WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+                GROUP BY LOWER(picker_id)
+                ORDER BY score DESC
+            '''
+            params = [start_str, end_str] + cohort_picker_ids
+            cursor.execute(query, params)
     else:
         # No cohort - show all pickers (fallback for non-cohort users)
-        cursor.execute('''
+        execute_query(cursor, '''
             SELECT 
                 picker_id,
                 COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
@@ -350,9 +427,9 @@ def picker_api_stats():
                 COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
             FROM items
             WHERE updated_at >= ? AND updated_at <= ?
-            GROUP BY LOWER(picker_id)
+            GROUP BY LOWER(picker_id), picker_id
             ORDER BY score DESC
-        ''', (start_date.strftime('%Y-%m-%d %H:%M:%S'), end_date.strftime('%Y-%m-%d %H:%M:%S')))
+        ''', (start_str, end_str))
     
     all_pickers = cursor.fetchall()
     
@@ -382,22 +459,36 @@ def picker_api_stats():
     
     # Calculate daily average for color coding (within cohort)
     if cohort and cohort_picker_ids:
-        placeholders = ','.join(['?' for _ in cohort_picker_ids])
-        avg_query = f'''
-            SELECT AVG(score) as avg_score
-            FROM (
-                SELECT 
-                    LOWER(picker_id) as picker,
-                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-                FROM items
-                WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
-                GROUP BY LOWER(picker_id)
-            )
-        '''
-        params = [start_date.strftime('%Y-%m-%d %H:%M:%S'), end_date.strftime('%Y-%m-%d %H:%M:%S')] + cohort_picker_ids
-        cursor.execute(avg_query, params)
+        if USE_POSTGRES:
+            avg_query = '''
+                SELECT AVG(score) as avg_score
+                FROM (
+                    SELECT 
+                        LOWER(picker_id) as picker,
+                        COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                    FROM items
+                    WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
+                    GROUP BY LOWER(picker_id)
+                ) subq
+            '''
+            cursor.execute(avg_query, (start_str, end_str, cohort_picker_ids))
+        else:
+            placeholders = ','.join(['?' for _ in cohort_picker_ids])
+            avg_query = f'''
+                SELECT AVG(score) as avg_score
+                FROM (
+                    SELECT 
+                        LOWER(picker_id) as picker,
+                        COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                    FROM items
+                    WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+                    GROUP BY LOWER(picker_id)
+                )
+            '''
+            params = [start_str, end_str] + cohort_picker_ids
+            cursor.execute(avg_query, params)
     else:
-        cursor.execute('''
+        execute_query(cursor, '''
             SELECT AVG(score) as avg_score
             FROM (
                 SELECT 
@@ -406,11 +497,11 @@ def picker_api_stats():
                 FROM items
                 WHERE updated_at >= ? AND updated_at <= ?
                 GROUP BY LOWER(picker_id)
-            )
-        ''', (start_date.strftime('%Y-%m-%d %H:%M:%S'), end_date.strftime('%Y-%m-%d %H:%M:%S')))
+            ) subq
+        ''', (start_str, end_str))
     
     avg_result = cursor.fetchone()
-    daily_avg = avg_result['avg_score'] if avg_result and avg_result['avg_score'] else 0
+    daily_avg = float(avg_result['avg_score']) if avg_result and avg_result['avg_score'] else 0
     
     conn.close()
     
@@ -515,12 +606,11 @@ def supervisor_api_rankings():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Format dates as strings for SQLite
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
     # Get picker IDs for the selected cohort
-    cursor.execute('SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
+    execute_query(cursor, 'SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
     cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
     
     if not cohort_picker_ids:
@@ -532,41 +622,70 @@ def supervisor_api_rankings():
             'cohort': cohort
         })
     
-    # Create placeholders for IN clause
-    placeholders = ','.join(['?' for _ in cohort_picker_ids])
-    
     # Get stats for cohort pickers only
-    query = f'''
-        SELECT 
-            picker_id,
-            COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-            COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-            COUNT(DISTINCT external_picklist_id) as unique_picklists
-        FROM items
-        WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
-        GROUP BY LOWER(picker_id)
-        ORDER BY items_picked DESC
-    '''
-    params = [start_str, end_str] + cohort_picker_ids
-    cursor.execute(query, params)
+    if USE_POSTGRES:
+        query = '''
+            SELECT 
+                picker_id,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                COUNT(DISTINCT external_picklist_id) as unique_picklists
+            FROM items
+            WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
+            GROUP BY LOWER(picker_id), picker_id
+            ORDER BY items_picked DESC
+        '''
+        cursor.execute(query, (start_str, end_str, cohort_picker_ids))
+    else:
+        placeholders = ','.join(['?' for _ in cohort_picker_ids])
+        query = f'''
+            SELECT 
+                picker_id,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                COUNT(DISTINCT external_picklist_id) as unique_picklists
+            FROM items
+            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+            GROUP BY LOWER(picker_id)
+            ORDER BY items_picked DESC
+        '''
+        params = [start_str, end_str] + cohort_picker_ids
+        cursor.execute(query, params)
     
     pickers = cursor.fetchall()
     
     # Calculate cohort average
-    avg_query = f'''
-        SELECT AVG(score) as avg_score
-        FROM (
-            SELECT 
-                LOWER(picker_id) as picker,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-            FROM items
-            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
-            GROUP BY LOWER(picker_id)
-        )
-    '''
-    cursor.execute(avg_query, params)
+    if USE_POSTGRES:
+        avg_query = '''
+            SELECT AVG(score) as avg_score
+            FROM (
+                SELECT 
+                    LOWER(picker_id) as picker,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                FROM items
+                WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
+                GROUP BY LOWER(picker_id)
+            ) subq
+        '''
+        cursor.execute(avg_query, (start_str, end_str, cohort_picker_ids))
+    else:
+        placeholders = ','.join(['?' for _ in cohort_picker_ids])
+        avg_query = f'''
+            SELECT AVG(score) as avg_score
+            FROM (
+                SELECT 
+                    LOWER(picker_id) as picker,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                FROM items
+                WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+                GROUP BY LOWER(picker_id)
+            )
+        '''
+        params = [start_str, end_str] + cohort_picker_ids
+        cursor.execute(avg_query, params)
+    
     avg_result = cursor.fetchone()
-    daily_avg = avg_result['avg_score'] if avg_result and avg_result['avg_score'] else 0
+    daily_avg = float(avg_result['avg_score']) if avg_result and avg_result['avg_score'] else 0
     
     conn.close()
     
@@ -636,12 +755,11 @@ def supervisor_api_picker_detail(picker_id):
     conn = get_db()
     cursor = conn.cursor()
     
-    # Format dates as strings for SQLite
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
     # Get picker details (case-insensitive)
-    cursor.execute('''
+    execute_query(cursor, '''
         SELECT 
             external_picklist_id,
             location_bin_id,
@@ -701,41 +819,59 @@ def supervisor_download():
     conn = get_db()
     cursor = conn.cursor()
     
-    # Format dates as strings for SQLite
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
     # Get picker IDs for the selected cohort
-    cursor.execute('SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
+    execute_query(cursor, 'SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
     cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
     
     if cohort_picker_ids:
-        placeholders = ','.join(['?' for _ in cohort_picker_ids])
-        query = f'''
-            SELECT 
-                picker_id,
-                COUNT(DISTINCT external_picklist_id) as unique_picklists,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-            FROM items
-            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
-            GROUP BY LOWER(picker_id)
-            ORDER BY score DESC
-        '''
-        params = [start_str, end_str] + cohort_picker_ids
-        cursor.execute(query, params)
+        if USE_POSTGRES:
+            query = '''
+                SELECT 
+                    picker_id,
+                    COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                    COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                FROM items
+                WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
+                GROUP BY LOWER(picker_id), picker_id
+                ORDER BY score DESC
+            '''
+            cursor.execute(query, (start_str, end_str, cohort_picker_ids))
+        else:
+            placeholders = ','.join(['?' for _ in cohort_picker_ids])
+            query = f'''
+                SELECT 
+                    picker_id,
+                    COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                    COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+                FROM items
+                WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+                GROUP BY LOWER(picker_id)
+                ORDER BY score DESC
+            '''
+            params = [start_str, end_str] + cohort_picker_ids
+            cursor.execute(query, params)
     else:
-        cursor.execute('''
-            SELECT 
-                picker_id,
-                COUNT(DISTINCT external_picklist_id) as unique_picklists,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-            FROM items
-            WHERE 1=0
-        ''')
+        # Empty result
+        rows = []
+        conn.close()
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Rank', 'Picker ID', 'Picklists', 'Items Picked', 'Items Lost', 'Score'])
+        output.seek(0)
+        filename = f'cohort{cohort}_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        return send_file(
+            io.BytesIO(output.getvalue().encode()),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=filename
+        )
     
     rows = cursor.fetchall()
     conn.close()
@@ -774,7 +910,7 @@ def admin_login():
         
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE picker_id = ? AND role = ?', (username, 'admin'))
+        execute_query(cursor, 'SELECT * FROM users WHERE picker_id = ? AND role = ?', (username, 'admin'))
         user = cursor.fetchone()
         conn.close()
         
@@ -801,23 +937,23 @@ def admin_dashboard():
     cursor = conn.cursor()
     
     # Get stats
-    cursor.execute('SELECT COUNT(*) FROM items')
-    total_items = cursor.fetchone()[0]
+    execute_query(cursor, 'SELECT COUNT(*) as count FROM items')
+    total_items = cursor.fetchone()['count']
     
-    cursor.execute('SELECT COUNT(DISTINCT picker_id) FROM items')
-    total_pickers = cursor.fetchone()[0]
+    execute_query(cursor, 'SELECT COUNT(DISTINCT picker_id) as count FROM items')
+    total_pickers = cursor.fetchone()['count']
     
-    cursor.execute('SELECT COUNT(*) FROM users WHERE role = "picker"')
-    registered_pickers = cursor.fetchone()[0]
+    execute_query(cursor, "SELECT COUNT(*) as count FROM users WHERE role = 'picker'")
+    registered_pickers = cursor.fetchone()['count']
     
     # Get cohort stats
-    cursor.execute('SELECT COUNT(DISTINCT cohort) FROM users WHERE cohort IS NOT NULL')
-    total_cohorts = cursor.fetchone()[0]
+    execute_query(cursor, 'SELECT COUNT(DISTINCT cohort) as count FROM users WHERE cohort IS NOT NULL')
+    total_cohorts = cursor.fetchone()['count']
     
-    cursor.execute('SELECT COUNT(*) FROM users WHERE cohort IS NOT NULL')
-    pickers_in_cohorts = cursor.fetchone()[0]
+    execute_query(cursor, 'SELECT COUNT(*) as count FROM users WHERE cohort IS NOT NULL')
+    pickers_in_cohorts = cursor.fetchone()['count']
     
-    cursor.execute('SELECT filename, processed_at FROM processed_csvs ORDER BY processed_at DESC LIMIT 10')
+    execute_query(cursor, 'SELECT filename, processed_at FROM processed_csvs ORDER BY processed_at DESC LIMIT 10')
     recent_uploads = cursor.fetchall()
     
     conn.close()
@@ -904,6 +1040,36 @@ def admin_upload():
             
             # Insert batch when full
             if len(items_batch) >= BATCH_SIZE:
+                if USE_POSTGRES:
+                    cursor.executemany('''
+                        INSERT INTO items (
+                            source_warehouse, picker_id, item_status, dispatch_by_date,
+                            external_picklist_id, location_bin_id, location_sequence,
+                            updated_at, csv_file
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', items_batch)
+                else:
+                    cursor.executemany('''
+                        INSERT INTO items (
+                            source_warehouse, picker_id, item_status, dispatch_by_date,
+                            external_picklist_id, location_bin_id, location_sequence,
+                            updated_at, csv_file
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', items_batch)
+                rows_inserted += len(items_batch)
+                items_batch = []
+        
+        # Insert remaining items
+        if items_batch:
+            if USE_POSTGRES:
+                cursor.executemany('''
+                    INSERT INTO items (
+                        source_warehouse, picker_id, item_status, dispatch_by_date,
+                        external_picklist_id, location_bin_id, location_sequence,
+                        updated_at, csv_file
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ''', items_batch)
+            else:
                 cursor.executemany('''
                     INSERT INTO items (
                         source_warehouse, picker_id, item_status, dispatch_by_date,
@@ -911,33 +1077,35 @@ def admin_upload():
                         updated_at, csv_file
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', items_batch)
-                rows_inserted += len(items_batch)
-                items_batch = []
-        
-        # Insert remaining items
-        if items_batch:
-            cursor.executemany('''
-                INSERT INTO items (
-                    source_warehouse, picker_id, item_status, dispatch_by_date,
-                    external_picklist_id, location_bin_id, location_sequence,
-                    updated_at, csv_file
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', items_batch)
             rows_inserted += len(items_batch)
         
-        # Create picker users for all unique pickers
+        # Create picker users for all unique pickers (only if they don't exist)
         default_password = generate_password_hash('picker123')
         for picker_id in pickers_seen:
             try:
-                cursor.execute('INSERT INTO users (picker_id, password, role, password_changed) VALUES (?, ?, ?, ?)',
-                              (picker_id, default_password, 'picker', 0))
-                pickers_added += 1
+                if USE_POSTGRES:
+                    cursor.execute('''
+                        INSERT INTO users (picker_id, password, role, password_changed) 
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (picker_id) DO NOTHING
+                    ''', (picker_id, default_password, 'picker', 0))
+                else:
+                    cursor.execute('INSERT OR IGNORE INTO users (picker_id, password, role, password_changed) VALUES (?, ?, ?, ?)',
+                                  (picker_id, default_password, 'picker', 0))
+                pickers_added += cursor.rowcount
             except:
                 pass  # User already exists
         
         # Record the upload
-        cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
-                      (file.filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        if USE_POSTGRES:
+            cursor.execute('''
+                INSERT INTO processed_csvs (filename, processed_at) 
+                VALUES (%s, %s)
+                ON CONFLICT (filename) DO UPDATE SET processed_at = EXCLUDED.processed_at
+            ''', (file.filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        else:
+            cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
+                          (file.filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         
         conn.commit()
         conn.close()
@@ -959,8 +1127,8 @@ def admin_clear_data():
     """Clear all item data (keeps users)"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM items')
-    cursor.execute('DELETE FROM processed_csvs')
+    execute_query(cursor, 'DELETE FROM items')
+    execute_query(cursor, 'DELETE FROM processed_csvs')
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'message': 'All item data cleared'})
@@ -1020,17 +1188,17 @@ def admin_upload_cohorts():
         
         for picker_id, cohort_num in picker_cohorts.items():
             # Check if user exists (case-insensitive)
-            cursor.execute('SELECT id, cohort FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
+            execute_query(cursor, 'SELECT id, cohort FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
             existing = cursor.fetchone()
             
             if existing:
                 # Update cohort and password (password = picker_id)
-                cursor.execute('UPDATE users SET cohort = ?, password = ? WHERE LOWER(picker_id) = LOWER(?)', 
+                execute_query(cursor, 'UPDATE users SET cohort = ?, password = ? WHERE LOWER(picker_id) = LOWER(?)', 
                              (cohort_num, generate_password_hash(picker_id), picker_id))
                 updated += 1
             else:
                 # Create new user with password = picker_id
-                cursor.execute('''
+                execute_query(cursor, '''
                     INSERT INTO users (picker_id, password, role, cohort, password_changed)
                     VALUES (?, ?, ?, ?, 0)
                 ''', (picker_id, generate_password_hash(picker_id), 'picker', cohort_num))
@@ -1039,14 +1207,14 @@ def admin_upload_cohorts():
         conn.commit()
         
         # Get cohort summary
-        cursor.execute('''
+        execute_query(cursor, '''
             SELECT cohort, COUNT(*) as count 
             FROM users 
             WHERE cohort IS NOT NULL 
             GROUP BY cohort 
             ORDER BY cohort
         ''')
-        cohort_summary = {row[0]: row[1] for row in cursor.fetchall()}
+        cohort_summary = {row['cohort']: row['count'] for row in cursor.fetchall()}
         
         conn.close()
         
@@ -1068,4 +1236,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
     debug = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
     app.run(debug=debug, host='0.0.0.0', port=port)
-
