@@ -37,6 +37,11 @@
             box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
         }
         
+        .cohort-tab.all-tab.active {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            box-shadow: 0 4px 12px rgba(17, 153, 142, 0.4);
+        }
+        
         .cohort-header {
             display: flex;
             justify-content: space-between;
@@ -46,6 +51,10 @@
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             border-radius: 12px;
             color: white;
+        }
+        
+        .cohort-header.all-view {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
         
         .cohort-header h2 {
@@ -71,6 +80,20 @@
             font-size: 12px;
             opacity: 0.9;
         }
+        
+        .rankings-table th,
+        .rankings-table td {
+            padding: 10px 8px;
+            font-size: 13px;
+        }
+        
+        @media (max-width: 768px) {
+            .rankings-table th,
+            .rankings-table td {
+                padding: 8px 4px;
+                font-size: 11px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -86,6 +109,7 @@
         
         <!-- Cohort Tabs -->
         <div class="cohort-tabs">
+            <button class="cohort-tab all-tab" data-cohort="all">All Pickers</button>
             <button class="cohort-tab active" data-cohort="1">Cohort 1</button>
             <button class="cohort-tab" data-cohort="2">Cohort 2</button>
             <button class="cohort-tab" data-cohort="3">Cohort 3</button>
@@ -93,10 +117,6 @@
             <button class="cohort-tab" data-cohort="5">Cohort 5</button>
             <button class="cohort-tab" data-cohort="6">Cohort 6</button>
             <button class="cohort-tab" data-cohort="7">Cohort 7</button>
-            <button class="cohort-tab" data-cohort="8">Cohort 8</button>
-            <button class="cohort-tab" data-cohort="9">Cohort 9</button>
-            <button class="cohort-tab" data-cohort="10">Cohort 10</button>
-            <button class="cohort-tab" data-cohort="11">Cohort 11</button>
         </div>
         
         <!-- Cohort Header -->
@@ -105,7 +125,7 @@
             <div class="cohort-stats">
                 <div class="cohort-stat">
                     <div class="cohort-stat-value" id="cohort-pickers">-</div>
-                    <div class="cohort-stat-label">Pickers</div>
+                    <div class="cohort-stat-label">Active Pickers</div>
                 </div>
                 <div class="cohort-stat">
                     <div class="cohort-stat-value" id="cohort-avg">-</div>
@@ -128,7 +148,10 @@
                 <thead>
                     <tr>
                         <th>Rank</th>
+                        <th>Name</th>
                         <th>Picker ID</th>
+                        <th id="cohort-col-header" style="display: none;">Cohort</th>
+                        <th>Age (Days)</th>
                         <th>Picklists</th>
                         <th>Items Picked</th>
                         <th>Items Lost</th>
@@ -139,7 +162,7 @@
                 </thead>
                 <tbody id="rankings-body">
                     <tr>
-                        <td colspan="8" class="loading">Loading rankings...</td>
+                        <td colspan="11" class="loading">Loading rankings...</td>
                     </tr>
                 </tbody>
             </table>
@@ -150,6 +173,7 @@
             <div class="modal-content">
                 <span class="close">&times;</span>
                 <h2 id="modal-picker-id">Picker Details</h2>
+                <div class="modal-picker-info" id="modal-picker-info"></div>
                 <div id="modal-content">
                     <div class="loading">Loading details...</div>
                 </div>

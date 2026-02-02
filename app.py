@@ -63,11 +63,20 @@ def init_db():
                 picker_id TEXT UNIQUE,
                 password TEXT,
                 role TEXT,
+                name TEXT,
                 cohort INTEGER DEFAULT NULL,
+                doj DATE DEFAULT NULL,
                 password_changed INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Add new columns if they don't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS doj DATE")
+        except:
+            pass
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS items (
@@ -107,7 +116,9 @@ def init_db():
                 picker_id TEXT UNIQUE,
                 password TEXT,
                 role TEXT,
+                name TEXT,
                 cohort INTEGER DEFAULT NULL,
+                doj DATE DEFAULT NULL,
                 password_changed INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -121,6 +132,16 @@ def init_db():
         
         try:
             cursor.execute('ALTER TABLE users ADD COLUMN cohort INTEGER DEFAULT NULL')
+        except:
+            pass
+        
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN name TEXT')
+        except:
+            pass
+        
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN doj DATE')
         except:
             pass
         
@@ -150,6 +171,24 @@ def init_db():
     
     conn.commit()
     conn.close()
+
+def calculate_age_in_days(doj):
+    """Calculate the number of days since date of joining"""
+    if not doj:
+        return None
+    try:
+        if isinstance(doj, str):
+            # Try different date formats
+            for fmt in ['%Y-%m-%d', '%d-%b-%Y', '%d/%m/%Y']:
+                try:
+                    doj = datetime.strptime(doj, fmt).date()
+                    break
+                except ValueError:
+                    continue
+        today = datetime.now().date()
+        return (today - doj).days
+    except:
+        return None
 
 def login_required(f):
     """Decorator to require login"""
@@ -192,7 +231,7 @@ def login():
         
         conn = get_db()
         cursor = conn.cursor()
-        execute_query(cursor, 'SELECT * FROM users WHERE picker_id = ?', (picker_id,))
+        execute_query(cursor, 'SELECT * FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
         user = cursor.fetchone()
         conn.close()
         
@@ -200,11 +239,15 @@ def login():
             session['user_id'] = user['picker_id']
             session['role'] = user['role']
             
-            # Store cohort in session for pickers
+            # Store additional user info in session
             try:
                 session['cohort'] = user['cohort'] if user['cohort'] else None
+                session['name'] = user['name'] if user.get('name') else None
+                session['doj'] = str(user['doj']) if user.get('doj') else None
             except:
                 session['cohort'] = None
+                session['name'] = None
+                session['doj'] = None
             
             # Check if password needs to be changed (first login)
             try:
@@ -249,7 +292,7 @@ def change_password_first():
         conn = get_db()
         cursor = conn.cursor()
         execute_query(cursor, '''
-            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+            UPDATE users SET password = ?, password_changed = 1 WHERE LOWER(picker_id) = LOWER(?)
         ''', (generate_password_hash(new_password), session['user_id']))
         conn.commit()
         conn.close()
@@ -274,7 +317,7 @@ def change_password_settings():
         # Verify current password
         conn = get_db()
         cursor = conn.cursor()
-        execute_query(cursor, 'SELECT password FROM users WHERE picker_id = ?', (session['user_id'],))
+        execute_query(cursor, 'SELECT password FROM users WHERE LOWER(picker_id) = LOWER(?)', (session['user_id'],))
         user = cursor.fetchone()
         
         if not user or not check_password_hash(user['password'], current_password):
@@ -292,7 +335,7 @@ def change_password_settings():
         
         # Update password
         execute_query(cursor, '''
-            UPDATE users SET password = ?, password_changed = 1 WHERE picker_id = ?
+            UPDATE users SET password = ?, password_changed = 1 WHERE LOWER(picker_id) = LOWER(?)
         ''', (generate_password_hash(new_password), session['user_id']))
         conn.commit()
         conn.close()
@@ -311,8 +354,21 @@ def picker_dashboard():
     picker_id = session['user_id']
     time_filter = request.args.get('filter', 'today')
     cohort = session.get('cohort')
+    name = session.get('name')
+    doj = session.get('doj')
     
-    return render_template('picker_dashboard.html', picker_id=picker_id, time_filter=time_filter, cohort=cohort)
+    # Calculate age in system
+    age_in_days = None
+    if doj:
+        age_in_days = calculate_age_in_days(doj)
+    
+    return render_template('picker_dashboard.html', 
+                          picker_id=picker_id, 
+                          time_filter=time_filter, 
+                          cohort=cohort,
+                          name=name,
+                          doj=doj,
+                          age_in_days=age_in_days)
 
 @app.route('/picker/api/stats')
 @login_required
@@ -360,6 +416,13 @@ def picker_api_stats():
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
+    # Get current user's info (name, doj)
+    execute_query(cursor, 'SELECT name, doj, cohort FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
+    user_info = cursor.fetchone()
+    user_name = user_info['name'] if user_info and user_info.get('name') else None
+    user_doj = user_info['doj'] if user_info and user_info.get('doj') else None
+    user_age_in_days = calculate_age_in_days(user_doj)
+    
     # Get picker stats (case-insensitive match)
     execute_query(cursor, '''
         SELECT 
@@ -376,11 +439,19 @@ def picker_api_stats():
     unique_picklists = stats['unique_picklists'] if stats else 0
     score = items_picked
     
-    # Get cohort picker IDs if user has a cohort
+    # Get cohort picker IDs and their info if user has a cohort
+    cohort_users = {}
     cohort_picker_ids = []
     if cohort:
-        execute_query(cursor, 'SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
-        cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
+        execute_query(cursor, 'SELECT picker_id, name, doj FROM users WHERE cohort = ?', (cohort,))
+        for row in cursor.fetchall():
+            pid = row['picker_id'].lower()
+            cohort_picker_ids.append(pid)
+            cohort_users[pid] = {
+                'name': row['name'] if row.get('name') else None,
+                'doj': row['doj'] if row.get('doj') else None,
+                'age_in_days': calculate_age_in_days(row['doj']) if row.get('doj') else None
+            }
     
     # Get all pickers' scores for ranking (with items picked, lost, and unique picklists)
     # Filter by cohort if the user belongs to a cohort
@@ -516,8 +587,10 @@ def picker_api_stats():
     else:
         status_color = 'yellow'
     
-    # Build leaderboard with status colors
+    # Build leaderboard with status colors (limit to top 15)
     leaderboard = []
+    current_user_entry = None
+    
     for idx, p in enumerate(all_pickers):
         p_score = p['items_picked']
         if daily_avg > 0:
@@ -532,16 +605,31 @@ def picker_api_stats():
         
         is_current_user = p['picker_id'].lower() == picker_id.lower()
         
-        leaderboard.append({
+        # Get name and age from cohort_users
+        picker_lower = p['picker_id'].lower()
+        picker_name = cohort_users.get(picker_lower, {}).get('name')
+        picker_age = cohort_users.get(picker_lower, {}).get('age_in_days')
+        
+        entry = {
             'rank': idx + 1,
             'picker_id': p['picker_id'],
+            'name': picker_name,
+            'age_in_days': picker_age,
             'items_picked': p['items_picked'],
             'items_lost': p['items_lost'],
             'unique_picklists': p['unique_picklists'],
             'score': p_score,
             'status_color': p_status,
             'is_current_user': is_current_user
-        })
+        }
+        
+        # Add to top 15
+        if idx < 15:
+            leaderboard.append(entry)
+        
+        # Track current user if they're beyond top 15
+        if is_current_user:
+            current_user_entry = entry
     
     return jsonify({
         'items_picked': items_picked,
@@ -555,7 +643,10 @@ def picker_api_stats():
         'daily_avg': round(daily_avg, 2),
         'status_color': status_color,
         'leaderboard': leaderboard,
-        'cohort': cohort
+        'current_user_entry': current_user_entry,
+        'cohort': cohort,
+        'user_name': user_name,
+        'user_age_in_days': user_age_in_days
     })
 
 @app.route('/supervisor/dashboard')
@@ -572,10 +663,14 @@ def supervisor_api_rankings():
     time_filter = request.args.get('filter', 'today')
     cohort = request.args.get('cohort', '1')
     
-    try:
-        cohort = int(cohort)
-    except ValueError:
-        cohort = 1
+    # Handle "all" cohorts view
+    show_all = cohort == 'all'
+    
+    if not show_all:
+        try:
+            cohort = int(cohort)
+        except ValueError:
+            cohort = 1
     
     # Calculate date range
     now = datetime.now()
@@ -609,9 +704,23 @@ def supervisor_api_rankings():
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
-    # Get picker IDs for the selected cohort
-    execute_query(cursor, 'SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
-    cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
+    # Get all users with their info
+    if show_all:
+        execute_query(cursor, 'SELECT picker_id, name, doj, cohort FROM users WHERE role = ?', ('picker',))
+    else:
+        execute_query(cursor, 'SELECT picker_id, name, doj, cohort FROM users WHERE cohort = ?', (cohort,))
+    
+    users_data = {}
+    cohort_picker_ids = []
+    for row in cursor.fetchall():
+        pid = row['picker_id'].lower()
+        cohort_picker_ids.append(pid)
+        users_data[pid] = {
+            'name': row['name'] if row.get('name') else None,
+            'doj': row['doj'] if row.get('doj') else None,
+            'age_in_days': calculate_age_in_days(row['doj']) if row.get('doj') else None,
+            'cohort': row['cohort'] if row.get('cohort') else None
+        }
     
     if not cohort_picker_ids:
         conn.close()
@@ -619,7 +728,7 @@ def supervisor_api_rankings():
             'rankings': [],
             'daily_avg': 0,
             'total_pickers': 0,
-            'cohort': cohort
+            'cohort': 'all' if show_all else cohort
         })
     
     # Get stats for cohort pickers only
@@ -703,9 +812,15 @@ def supervisor_api_rankings():
         else:
             status_color = 'yellow'
         
+        picker_lower = picker['picker_id'].lower()
+        user_data = users_data.get(picker_lower, {})
+        
         rankings.append({
             'rank': idx + 1,
             'picker_id': picker['picker_id'],
+            'name': user_data.get('name'),
+            'age_in_days': user_data.get('age_in_days'),
+            'cohort': user_data.get('cohort'),
             'items_picked': picker['items_picked'],
             'items_lost': picker['items_lost'],
             'unique_picklists': picker['unique_picklists'],
@@ -717,7 +832,7 @@ def supervisor_api_rankings():
         'rankings': rankings,
         'daily_avg': round(daily_avg, 2),
         'total_pickers': len(rankings),
-        'cohort': cohort
+        'cohort': 'all' if show_all else cohort
     })
 
 @app.route('/supervisor/api/picker/<picker_id>')
@@ -758,6 +873,10 @@ def supervisor_api_picker_detail(picker_id):
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
+    # Get picker info
+    execute_query(cursor, 'SELECT name, doj, cohort FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
+    user_info = cursor.fetchone()
+    
     # Get picker details (case-insensitive)
     execute_query(cursor, '''
         SELECT 
@@ -775,6 +894,10 @@ def supervisor_api_picker_detail(picker_id):
     
     return jsonify({
         'picker_id': picker_id,
+        'name': user_info['name'] if user_info and user_info.get('name') else None,
+        'doj': str(user_info['doj']) if user_info and user_info.get('doj') else None,
+        'cohort': user_info['cohort'] if user_info and user_info.get('cohort') else None,
+        'age_in_days': calculate_age_in_days(user_info['doj']) if user_info and user_info.get('doj') else None,
         'details': [dict(row) for row in details]
     })
 
@@ -785,10 +908,13 @@ def supervisor_download():
     time_filter = request.args.get('filter', 'today')
     cohort = request.args.get('cohort', '1')
     
-    try:
-        cohort = int(cohort)
-    except ValueError:
-        cohort = 1
+    show_all = cohort == 'all'
+    
+    if not show_all:
+        try:
+            cohort = int(cohort)
+        except ValueError:
+            cohort = 1
     
     # Calculate date range
     now = datetime.now()
@@ -822,50 +948,30 @@ def supervisor_download():
     start_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
     
-    # Get picker IDs for the selected cohort
-    execute_query(cursor, 'SELECT picker_id FROM users WHERE cohort = ?', (cohort,))
-    cohort_picker_ids = [row['picker_id'].lower() for row in cursor.fetchall()]
-    
-    if cohort_picker_ids:
-        if USE_POSTGRES:
-            query = '''
-                SELECT 
-                    picker_id,
-                    COUNT(DISTINCT external_picklist_id) as unique_picklists,
-                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-                    COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-                FROM items
-                WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
-                GROUP BY LOWER(picker_id), picker_id
-                ORDER BY score DESC
-            '''
-            cursor.execute(query, (start_str, end_str, cohort_picker_ids))
-        else:
-            placeholders = ','.join(['?' for _ in cohort_picker_ids])
-            query = f'''
-                SELECT 
-                    picker_id,
-                    COUNT(DISTINCT external_picklist_id) as unique_picklists,
-                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
-                    COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
-                    COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
-                FROM items
-                WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
-                GROUP BY LOWER(picker_id)
-                ORDER BY score DESC
-            '''
-            params = [start_str, end_str] + cohort_picker_ids
-            cursor.execute(query, params)
+    # Get user info
+    if show_all:
+        execute_query(cursor, 'SELECT picker_id, name, doj, cohort FROM users WHERE role = ?', ('picker',))
     else:
-        # Empty result
-        rows = []
+        execute_query(cursor, 'SELECT picker_id, name, doj, cohort FROM users WHERE cohort = ?', (cohort,))
+    
+    users_data = {}
+    cohort_picker_ids = []
+    for row in cursor.fetchall():
+        pid = row['picker_id'].lower()
+        cohort_picker_ids.append(pid)
+        users_data[pid] = {
+            'name': row['name'] if row.get('name') else '',
+            'age_in_days': calculate_age_in_days(row['doj']) if row.get('doj') else '',
+            'cohort': row['cohort'] if row.get('cohort') else ''
+        }
+    
+    if not cohort_picker_ids:
         conn.close()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(['Rank', 'Picker ID', 'Picklists', 'Items Picked', 'Items Lost', 'Score'])
+        writer.writerow(['Rank', 'Picker ID', 'Name', 'Cohort', 'Age (Days)', 'Picklists', 'Items Picked', 'Items Lost', 'Score'])
         output.seek(0)
-        filename = f'cohort{cohort}_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        filename = f'{"all" if show_all else f"cohort{cohort}"}_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
         return send_file(
             io.BytesIO(output.getvalue().encode()),
             mimetype='text/csv',
@@ -873,19 +979,62 @@ def supervisor_download():
             download_name=filename
         )
     
+    if USE_POSTGRES:
+        query = '''
+            SELECT 
+                picker_id,
+                COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+            FROM items
+            WHERE updated_at >= %s AND updated_at <= %s AND LOWER(picker_id) = ANY(%s)
+            GROUP BY LOWER(picker_id), picker_id
+            ORDER BY score DESC
+        '''
+        cursor.execute(query, (start_str, end_str, cohort_picker_ids))
+    else:
+        placeholders = ','.join(['?' for _ in cohort_picker_ids])
+        query = f'''
+            SELECT 
+                picker_id,
+                COUNT(DISTINCT external_picklist_id) as unique_picklists,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as items_picked,
+                COUNT(CASE WHEN item_status = 'ITEM_NOT_FOUND' THEN 1 END) as items_lost,
+                COUNT(CASE WHEN item_status IN ('COMPLETED', 'ITEM_REPLACED') THEN 1 END) as score
+            FROM items
+            WHERE updated_at >= ? AND updated_at <= ? AND LOWER(picker_id) IN ({placeholders})
+            GROUP BY LOWER(picker_id)
+            ORDER BY score DESC
+        '''
+        params = [start_str, end_str] + cohort_picker_ids
+        cursor.execute(query, params)
+    
     rows = cursor.fetchall()
     conn.close()
     
     # Create CSV
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Rank', 'Picker ID', 'Picklists', 'Items Picked', 'Items Lost', 'Score'])
+    writer.writerow(['Rank', 'Picker ID', 'Name', 'Cohort', 'Age (Days)', 'Picklists', 'Items Picked', 'Items Lost', 'Score'])
     
     for idx, row in enumerate(rows, 1):
-        writer.writerow([idx, row['picker_id'], row['unique_picklists'], row['items_picked'], row['items_lost'], row['score']])
+        picker_lower = row['picker_id'].lower()
+        user_data = users_data.get(picker_lower, {})
+        writer.writerow([
+            idx, 
+            row['picker_id'], 
+            user_data.get('name', ''),
+            user_data.get('cohort', ''),
+            user_data.get('age_in_days', ''),
+            row['unique_picklists'], 
+            row['items_picked'], 
+            row['items_lost'], 
+            row['score']
+        ])
     
     output.seek(0)
-    filename = f'cohort{cohort}_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+    filename = f'{"all" if show_all else f"cohort{cohort}"}_rankings_{time_filter}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
     
     return send_file(
         io.BytesIO(output.getvalue().encode()),
@@ -1085,23 +1234,6 @@ def admin_upload():
             conn.commit()
             rows_inserted += len(items_batch)
         
-        # Create picker users for all unique pickers (only if they don't exist)
-        default_password = generate_password_hash('picker123')
-        for picker_id in pickers_seen:
-            try:
-                if USE_POSTGRES:
-                    cursor.execute('''
-                        INSERT INTO users (picker_id, password, role, password_changed) 
-                        VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (picker_id) DO NOTHING
-                    ''', (picker_id, default_password, 'picker', 0))
-                else:
-                    cursor.execute('INSERT OR IGNORE INTO users (picker_id, password, role, password_changed) VALUES (?, ?, ?, ?)',
-                                  (picker_id, default_password, 'picker', 0))
-                pickers_added += cursor.rowcount
-            except:
-                pass  # User already exists
-        
         # Record the upload
         if USE_POSTGRES:
             cursor.execute('''
@@ -1139,10 +1271,131 @@ def admin_clear_data():
     conn.close()
     return jsonify({'success': True, 'message': 'All item data cleared'})
 
+@app.route('/admin/clear-all', methods=['POST'])
+@admin_required
+def admin_clear_all():
+    """Clear all data including users (except admin)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    execute_query(cursor, 'DELETE FROM items')
+    execute_query(cursor, 'DELETE FROM processed_csvs')
+    execute_query(cursor, "DELETE FROM users WHERE role != 'admin'")
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': 'All data cleared (except admin users)'})
+
+@app.route('/admin/upload-pickers', methods=['POST'])
+@admin_required
+def admin_upload_pickers():
+    """Handle picker CSV upload with name, cohort, and DOJ"""
+    if 'picker_file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['picker_file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not file.filename.endswith('.csv'):
+        return jsonify({'error': 'File must be a CSV'}), 400
+    
+    try:
+        # Read CSV content
+        try:
+            content = file.read().decode('utf-8')
+        except UnicodeDecodeError:
+            file.seek(0)
+            content = file.read().decode('latin-1')
+        
+        csv_file = io.StringIO(content)
+        reader = csv.DictReader(csv_file)
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        created = 0
+        updated = 0
+        
+        for row in reader:
+            # Get picker info - handle different column names
+            picker_id = row.get('Casper ID', row.get('casper_id', row.get('picker_id', ''))).strip()
+            name = row.get('Name', row.get('name', '')).strip()
+            cohort = row.get('Cohort', row.get('cohort', '')).strip()
+            doj_str = row.get('DOJ', row.get('doj', row.get('Date of Joining', ''))).strip()
+            
+            if not picker_id:
+                continue
+            
+            # Parse cohort
+            try:
+                cohort_num = int(cohort) if cohort else None
+            except ValueError:
+                cohort_num = None
+            
+            # Parse DOJ
+            doj = None
+            if doj_str:
+                for fmt in ['%d-%b-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+                    try:
+                        doj = datetime.strptime(doj_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+            
+            # Check if user exists (case-insensitive)
+            execute_query(cursor, 'SELECT id FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update existing user
+                if USE_POSTGRES:
+                    cursor.execute('''
+                        UPDATE users SET name = %s, cohort = %s, doj = %s, password = %s 
+                        WHERE LOWER(picker_id) = LOWER(%s)
+                    ''', (name, cohort_num, doj, generate_password_hash(picker_id), picker_id))
+                else:
+                    cursor.execute('''
+                        UPDATE users SET name = ?, cohort = ?, doj = ?, password = ? 
+                        WHERE LOWER(picker_id) = LOWER(?)
+                    ''', (name, cohort_num, doj, generate_password_hash(picker_id), picker_id))
+                updated += 1
+            else:
+                # Create new user with password = picker_id
+                execute_query(cursor, '''
+                    INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                    VALUES (?, ?, ?, ?, ?, ?, 0)
+                ''', (picker_id, generate_password_hash(picker_id), 'picker', name, cohort_num, doj))
+                created += 1
+        
+        conn.commit()
+        
+        # Get cohort summary
+        execute_query(cursor, '''
+            SELECT cohort, COUNT(*) as count 
+            FROM users 
+            WHERE cohort IS NOT NULL 
+            GROUP BY cohort 
+            ORDER BY cohort
+        ''')
+        cohort_summary = {row['cohort']: row['count'] for row in cursor.fetchall()}
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'total_pickers': created + updated,
+            'created': created,
+            'updated': updated,
+            'cohort_summary': cohort_summary
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
 @app.route('/admin/upload-cohorts', methods=['POST'])
 @admin_required
 def admin_upload_cohorts():
-    """Handle cohort CSV upload"""
+    """Handle cohort CSV upload (legacy format with columns as cohorts)"""
     if 'cohort_file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     

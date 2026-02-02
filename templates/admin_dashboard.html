@@ -136,9 +136,26 @@
             padding: 10px 20px;
             border-radius: 8px;
             cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
         }
         .btn-danger:hover {
             background: #c53030;
+        }
+        .format-hint {
+            background: #e8f4fd;
+            border: 1px solid #bee3f8;
+            border-radius: 8px;
+            padding: 10px 15px;
+            margin-top: 15px;
+            text-align: left;
+            font-size: 13px;
+        }
+        .format-hint code {
+            background: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
         }
     </style>
 </head>
@@ -178,10 +195,36 @@
             </div>
         </div>
         
-        <!-- Upload Section -->
+        <!-- Picker Upload Section (NEW FORMAT) -->
+        <div class="upload-section" style="border-color: #11998e;">
+            <h3 style="color: #11998e;">👤 Upload Picker List (CSV)</h3>
+            <p style="color: #666; margin-bottom: 20px;">
+                Upload a CSV with picker details. Password will be set to their Casper ID.
+            </p>
+            
+            <form id="picker-upload-form" enctype="multipart/form-data">
+                <div class="file-input-wrapper">
+                    <input type="file" id="picker-file" name="picker_file" accept=".csv" required>
+                </div>
+                <br><br>
+                <button type="submit" class="upload-btn" id="picker-upload-btn" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+                    Upload Pickers
+                </button>
+            </form>
+            
+            <div class="format-hint">
+                <strong>CSV Format:</strong><br>
+                Columns: <code>Casper ID</code>, <code>Name</code>, <code>Cohort</code>, <code>DOJ</code><br>
+                Example: <code>ca.3867958, Suraj Kumar, 1, 28-Nov-2025</code>
+            </div>
+            
+            <div class="upload-result" id="picker-upload-result"></div>
+        </div>
+        
+        <!-- Data Upload Section -->
         <div class="upload-section">
-            <h3>📤 Upload Picker Data (CSV)</h3>
-            <p style="color: #666; margin-bottom: 20px;">Upload CSV files with picker productivity data. New pickers will be auto-registered with password: <code>picker123</code></p>
+            <h3>📤 Upload Picker Productivity Data (CSV)</h3>
+            <p style="color: #666; margin-bottom: 20px;">Upload CSV files with picker productivity data (items picked/lost).</p>
             
             <form id="upload-form" enctype="multipart/form-data">
                 <div class="file-input-wrapper">
@@ -196,12 +239,12 @@
             <div class="upload-result" id="upload-result"></div>
         </div>
         
-        <!-- Cohort Upload Section -->
+        <!-- Cohort Upload Section (Legacy) -->
         <div class="upload-section" style="border-color: #f093fb; margin-top: 20px;">
-            <h3>👥 Upload Picker Cohorts (CSV)</h3>
+            <h3 style="color: #f093fb;">👥 Upload Picker Cohorts (Legacy CSV)</h3>
             <p style="color: #666; margin-bottom: 20px;">
                 Upload a CSV with cohort columns (Cohort 1, Cohort 2, etc.) containing picker IDs.<br>
-                Each picker will be assigned to their cohort and see only cohort-specific rankings.
+                <small>Note: Use "Upload Picker List" above if you have names and DOJ data.</small>
             </p>
             
             <form id="cohort-upload-form" enctype="multipart/form-data">
@@ -237,12 +280,90 @@
         <!-- Danger Zone -->
         <div class="danger-zone">
             <h3>⚠️ Danger Zone</h3>
-            <p style="color: #666; margin-bottom: 15px;">Clear all item data from the database. User accounts will be preserved.</p>
-            <button class="btn-danger" onclick="clearData()">Clear All Item Data</button>
+            <p style="color: #666; margin-bottom: 15px;">These actions cannot be undone!</p>
+            <button class="btn-danger" onclick="clearData()">Clear Item Data Only</button>
+            <button class="btn-danger" onclick="clearAllData()">Clear All Data (Including Users)</button>
         </div>
     </div>
     
     <script>
+        // Picker Upload Handler (NEW FORMAT)
+        document.getElementById('picker-upload-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('picker-file');
+            const uploadBtn = document.getElementById('picker-upload-btn');
+            const resultDiv = document.getElementById('picker-upload-result');
+            
+            if (!fileInput.files[0]) {
+                alert('Please select a file');
+                return;
+            }
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+            resultDiv.className = 'upload-result';
+            resultDiv.innerHTML = '<strong>⏳ Processing pickers...</strong>';
+            resultDiv.style.display = 'block';
+            resultDiv.style.background = '#fff3cd';
+            resultDiv.style.color = '#856404';
+            
+            const formData = new FormData();
+            formData.append('picker_file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/admin/upload-pickers', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const responseText = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    resultDiv.className = 'upload-result error';
+                    resultDiv.innerHTML = `<strong>❌ Server Error:</strong><br><pre style="white-space: pre-wrap; font-size: 12px;">${responseText.substring(0, 500)}</pre>`;
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = 'Upload Pickers';
+                    return;
+                }
+                
+                if (data.success) {
+                    resultDiv.className = 'upload-result success';
+                    let cohortSummary = '';
+                    if (data.cohort_summary) {
+                        cohortSummary = '<br><br><strong>Cohort Summary:</strong><br>';
+                        for (const [cohort, count] of Object.entries(data.cohort_summary)) {
+                            cohortSummary += `Cohort ${cohort}: ${count} pickers<br>`;
+                        }
+                    }
+                    resultDiv.innerHTML = `
+                        <strong>✅ Pickers Uploaded Successfully!</strong><br>
+                        Total pickers: ${data.total_pickers}<br>
+                        New users created: ${data.created}<br>
+                        Existing users updated: ${data.updated}
+                        ${cohortSummary}
+                    `;
+                    setTimeout(() => location.reload(), 3000);
+                } else {
+                    resultDiv.className = 'upload-result error';
+                    let errorHtml = `<strong>❌ Error:</strong> ${data.error}`;
+                    if (data.trace) {
+                        errorHtml += `<br><br><pre style="white-space: pre-wrap; font-size: 11px; max-height: 200px; overflow: auto;">${data.trace}</pre>`;
+                    }
+                    resultDiv.innerHTML = errorHtml;
+                }
+            } catch (error) {
+                resultDiv.className = 'upload-result error';
+                resultDiv.innerHTML = `<strong>❌ Network Error:</strong> ${error.message}`;
+            }
+            
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload Pickers';
+        });
+        
+        // Data Upload Handler
         document.getElementById('upload-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -323,7 +444,7 @@
         });
         
         async function clearData() {
-            if (!confirm('Are you sure you want to clear ALL item data? This cannot be undone!')) {
+            if (!confirm('Are you sure you want to clear ALL item data? User accounts will be preserved.')) {
                 return;
             }
             
@@ -345,7 +466,34 @@
             }
         }
         
-        // Cohort Upload Handler
+        async function clearAllData() {
+            if (!confirm('⚠️ WARNING: This will delete ALL data including user accounts (except admin). Are you absolutely sure?')) {
+                return;
+            }
+            
+            if (!confirm('This action CANNOT be undone. Type "DELETE" to confirm (just click OK).')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/admin/clear-all', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('All data cleared successfully!');
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        // Cohort Upload Handler (Legacy)
         document.getElementById('cohort-upload-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -409,4 +557,3 @@
     </script>
 </body>
 </html>
-

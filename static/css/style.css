@@ -170,13 +170,68 @@ body {
 .cohort-badge {
     font-weight: 700;
     color: white;
-    padding: 8px 16px;
+    padding: 6px 14px;
     background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
     border-radius: 20px;
-    font-size: 14px;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 1px;
     box-shadow: 0 2px 8px rgba(245, 87, 108, 0.3);
+}
+
+.age-badge {
+    font-weight: 600;
+    color: white;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+    border-radius: 20px;
+    font-size: 13px;
+    box-shadow: 0 2px 8px rgba(17, 153, 142, 0.3);
+}
+
+.header-title {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.header-title h1 {
+    margin: 0;
+}
+
+.picker-info {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.picker-name {
+    font-weight: 700;
+    color: #333;
+    font-size: 16px;
+}
+
+.picker-id-label {
+    font-weight: 500;
+    color: #666;
+    font-size: 14px;
+    padding: 4px 10px;
+    background: #f0f0f0;
+    border-radius: 6px;
+}
+
+/* Current User Section */
+.current-user-section {
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 2px dashed #667eea;
+}
+
+.current-user-section h3 {
+    color: #667eea;
+    margin-bottom: 15px;
+    font-size: 18px;
 }
 
 /* Incentive Banner */

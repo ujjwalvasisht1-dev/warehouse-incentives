@@ -1,7 +1,7 @@
 // Supervisor Dashboard JavaScript
 
 let currentFilter = 'today';
-let currentCohort = 1;
+let currentCohort = '1';  // Can be a number or 'all'
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function() {
@@ -9,10 +9,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const cohortTabs = document.querySelectorAll('.cohort-tab');
     cohortTabs.forEach(tab => {
         tab.addEventListener('click', function() {
-            currentCohort = parseInt(this.dataset.cohort);
+            currentCohort = this.dataset.cohort;
             cohortTabs.forEach(t => t.classList.remove('active'));
             this.classList.add('active');
             updateCohortHeader();
+            updateCohortColumnVisibility();
             loadRankings();
             updateDownloadLink();
         });
@@ -48,6 +49,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initial load
     updateCohortHeader();
+    updateCohortColumnVisibility();
     loadRankings();
     updateDownloadLink();
     
@@ -57,8 +59,33 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function updateCohortHeader() {
     const title = document.getElementById('cohort-title');
+    const header = document.getElementById('cohort-header');
+    
     if (title) {
-        title.textContent = `Cohort ${currentCohort} Rankings`;
+        if (currentCohort === 'all') {
+            title.textContent = 'All Pickers Rankings';
+        } else {
+            title.textContent = `Cohort ${currentCohort} Rankings`;
+        }
+    }
+    
+    if (header) {
+        if (currentCohort === 'all') {
+            header.classList.add('all-view');
+        } else {
+            header.classList.remove('all-view');
+        }
+    }
+}
+
+function updateCohortColumnVisibility() {
+    const cohortColHeader = document.getElementById('cohort-col-header');
+    if (cohortColHeader) {
+        if (currentCohort === 'all') {
+            cohortColHeader.style.display = '';
+        } else {
+            cohortColHeader.style.display = 'none';
+        }
     }
 }
 
@@ -71,8 +98,10 @@ function updateDownloadLink() {
 
 function loadRankings() {
     const tbody = document.getElementById('rankings-body');
+    const colSpan = currentCohort === 'all' ? '12' : '11';
+    
     if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="8" class="loading">Loading rankings...</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${colSpan}" class="loading">Loading rankings...</td></tr>`;
     }
     
     fetch(`/supervisor/api/rankings?filter=${currentFilter}&cohort=${currentCohort}`)
@@ -84,7 +113,7 @@ function loadRankings() {
         .catch(error => {
             console.error('Error loading rankings:', error);
             if (tbody) {
-                tbody.innerHTML = '<tr><td colspan="8" class="loading">Error loading data. Please refresh.</td></tr>';
+                tbody.innerHTML = `<tr><td colspan="${colSpan}" class="loading">Error loading data. Please refresh.</td></tr>`;
             }
         });
 }
@@ -93,23 +122,40 @@ function updateRankingsTable(data) {
     const tbody = document.getElementById('rankings-body');
     if (!tbody) return;
     
+    const showCohortColumn = currentCohort === 'all';
+    const colSpan = showCohortColumn ? '12' : '11';
+    
     if (!data.rankings || data.rankings.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="loading">No data available for this cohort</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${colSpan}" class="loading">No data available${currentCohort !== 'all' ? ' for this cohort' : ''}</td></tr>`;
         return;
     }
     
-    tbody.innerHTML = data.rankings.map(picker => `
-        <tr>
-            <td><strong>#${picker.rank}</strong></td>
-            <td>${picker.picker_id}</td>
-            <td>${picker.unique_picklists}</td>
-            <td>${picker.items_picked}</td>
-            <td>${picker.items_lost}</td>
-            <td><strong>${picker.score}</strong></td>
-            <td><span class="rank-badge ${picker.status_color}">${getStatusLabel(picker.status_color)}</span></td>
-            <td><button class="btn-view" onclick="viewPickerDetails('${picker.picker_id}')">View Details</button></td>
-        </tr>
-    `).join('');
+    tbody.innerHTML = data.rankings.map(picker => {
+        const displayName = picker.name || '-';
+        const ageDisplay = picker.age_in_days !== null && picker.age_in_days !== undefined ? picker.age_in_days : '-';
+        const cohortDisplay = picker.cohort || '-';
+        
+        let cohortCell = '';
+        if (showCohortColumn) {
+            cohortCell = `<td>${cohortDisplay}</td>`;
+        }
+        
+        return `
+            <tr>
+                <td><strong>#${picker.rank}</strong></td>
+                <td>${displayName}</td>
+                <td>${picker.picker_id}</td>
+                ${cohortCell}
+                <td>${ageDisplay}</td>
+                <td>${picker.unique_picklists}</td>
+                <td>${picker.items_picked}</td>
+                <td>${picker.items_lost}</td>
+                <td><strong>${picker.score}</strong></td>
+                <td><span class="rank-badge ${picker.status_color}">${getStatusLabel(picker.status_color)}</span></td>
+                <td><button class="btn-view" onclick="viewPickerDetails('${picker.picker_id}')">View</button></td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function updateCohortStats(data) {
@@ -133,17 +179,34 @@ function getStatusLabel(color) {
 function viewPickerDetails(pickerId) {
     const modal = document.getElementById('picker-modal');
     const modalPickerId = document.getElementById('modal-picker-id');
+    const modalPickerInfo = document.getElementById('modal-picker-info');
     const modalContent = document.getElementById('modal-content');
     
     if (!modal || !modalPickerId || !modalContent) return;
     
     modalPickerId.textContent = `Picker Details: ${pickerId}`;
+    if (modalPickerInfo) modalPickerInfo.innerHTML = '';
     modalContent.innerHTML = '<div class="loading">Loading details...</div>';
     modal.style.display = 'block';
     
     fetch(`/supervisor/api/picker/${pickerId}?filter=${currentFilter}`)
         .then(response => response.json())
         .then(data => {
+            // Show picker info
+            if (modalPickerInfo) {
+                const name = data.name || '-';
+                const cohort = data.cohort || '-';
+                const age = data.age_in_days !== null && data.age_in_days !== undefined ? data.age_in_days : '-';
+                
+                modalPickerInfo.innerHTML = `
+                    <div style="display: flex; gap: 20px; margin-bottom: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                        <div><strong>Name:</strong> ${name}</div>
+                        <div><strong>Cohort:</strong> ${cohort}</div>
+                        <div><strong>Age in System:</strong> ${age} days</div>
+                    </div>
+                `;
+            }
+            
             if (data.details.length === 0) {
                 modalContent.innerHTML = '<p>No details available for this picker.</p>';
                 return;

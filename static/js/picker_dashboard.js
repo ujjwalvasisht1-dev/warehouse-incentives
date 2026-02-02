@@ -107,8 +107,8 @@ function updateDashboard(data) {
     // Update incentive banner
     updateIncentiveBanner(data.rank, data.total_pickers, data.items_to_next_rank, data.leaderboard);
     
-    // Update leaderboard table
-    updateLeaderboard(data.leaderboard || []);
+    // Update leaderboard table (top 15)
+    updateLeaderboard(data.leaderboard || [], data.current_user_entry);
 }
 
 function updateIncentiveBanner(rank, totalPickers, itemsToNext, leaderboard) {
@@ -251,23 +251,35 @@ function getItemsToRank(leaderboard, currentRank, targetRank) {
     return diff > 0 ? diff : 1;
 }
 
-function updateLeaderboard(leaderboard) {
+function updateLeaderboard(leaderboard, currentUserEntry) {
     const tbody = document.getElementById('leaderboard-body');
+    const currentUserSection = document.getElementById('current-user-section');
+    const currentUserBody = document.getElementById('current-user-body');
+    
     if (!tbody) return;
     
     if (leaderboard.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="loading">No data available</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="loading">No data available</td></tr>';
+        if (currentUserSection) currentUserSection.style.display = 'none';
         return;
     }
     
+    // Check if current user is in the top 15 (leaderboard)
+    const currentUserInTop15 = leaderboard.some(p => p.is_current_user);
+    
+    // Render leaderboard (top 15)
     tbody.innerHTML = leaderboard.map(picker => {
         const rowClass = picker.is_current_user ? 'current-user-row' : '';
         const statusLabel = getStatusLabel(picker.status_color);
+        const displayName = picker.name || '-';
+        const ageDisplay = picker.age_in_days !== null && picker.age_in_days !== undefined ? picker.age_in_days : '-';
         
         return `
             <tr class="${rowClass}">
                 <td><strong>#${picker.rank}</strong></td>
+                <td>${displayName}</td>
                 <td>${picker.picker_id} ${picker.is_current_user ? '<span class="you-badge">You</span>' : ''}</td>
+                <td>${ageDisplay}</td>
                 <td>${picker.unique_picklists}</td>
                 <td>${picker.items_picked}</td>
                 <td>${picker.items_lost}</td>
@@ -276,6 +288,32 @@ function updateLeaderboard(leaderboard) {
             </tr>
         `;
     }).join('');
+    
+    // Show current user section if they're not in top 15
+    if (currentUserSection && currentUserBody) {
+        if (!currentUserInTop15 && currentUserEntry) {
+            currentUserSection.style.display = 'block';
+            const statusLabel = getStatusLabel(currentUserEntry.status_color);
+            const displayName = currentUserEntry.name || '-';
+            const ageDisplay = currentUserEntry.age_in_days !== null && currentUserEntry.age_in_days !== undefined ? currentUserEntry.age_in_days : '-';
+            
+            currentUserBody.innerHTML = `
+                <tr class="current-user-row">
+                    <td><strong>#${currentUserEntry.rank}</strong></td>
+                    <td>${displayName}</td>
+                    <td>${currentUserEntry.picker_id} <span class="you-badge">You</span></td>
+                    <td>${ageDisplay}</td>
+                    <td>${currentUserEntry.unique_picklists}</td>
+                    <td>${currentUserEntry.items_picked}</td>
+                    <td>${currentUserEntry.items_lost}</td>
+                    <td><strong>${currentUserEntry.score}</strong></td>
+                    <td><span class="rank-badge ${currentUserEntry.status_color}">${statusLabel}</span></td>
+                </tr>
+            `;
+        } else {
+            currentUserSection.style.display = 'none';
+        }
+    }
 }
 
 function getStatusLabel(color) {
@@ -283,4 +321,3 @@ function getStatusLabel(color) {
     if (color === 'yellow') return 'Can Do Better';
     return 'Need to Perform Better';
 }
-
