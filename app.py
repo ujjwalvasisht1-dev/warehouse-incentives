@@ -1490,7 +1490,86 @@ def admin_upload_cohorts():
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
-# Load pickers in batches (call multiple times until done)
+# Fast batch load using pre-computed hashes
+@app.route('/debug/fast-load')
+def fast_load():
+    """Fast load pickers using pre-computed password hashes - call repeatedly until done"""
+    import json
+    
+    PICKERS_JSON = 'data_to_upload/pickers_with_hashes.json'
+    BATCH_SIZE = 100  # Larger batch since no hash computation needed
+    
+    if not os.path.exists(PICKERS_JSON):
+        return jsonify({'error': 'Pre-computed hashes file not found'}), 404
+    
+    try:
+        # Load pre-computed data
+        with open(PICKERS_JSON, 'r') as f:
+            all_pickers = json.load(f)
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Get existing picker IDs
+        if USE_POSTGRES:
+            cursor.execute("SELECT LOWER(picker_id) FROM users WHERE role = 'picker'")
+        else:
+            execute_query(cursor, "SELECT LOWER(picker_id) FROM users WHERE role = 'picker'")
+        existing = set(row[0] for row in cursor.fetchall())
+        
+        # Find pickers not yet in DB
+        to_insert = []
+        for p in all_pickers:
+            if p['picker_id'].lower() not in existing:
+                to_insert.append(p)
+                if len(to_insert) >= BATCH_SIZE:
+                    break
+        
+        # Insert batch
+        created = 0
+        for p in to_insert:
+            try:
+                if USE_POSTGRES:
+                    cursor.execute("""
+                        INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                        VALUES (%s, %s, %s, %s, %s, %s, 0)
+                    """, (p['picker_id'], p['password'], 'picker', p['name'], p['cohort'], p['doj']))
+                else:
+                    execute_query(cursor, """
+                        INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                        VALUES (?, ?, ?, ?, ?, ?, 0)
+                    """, (p['picker_id'], p['password'], 'picker', p['name'], p['cohort'], p['doj']))
+                created += 1
+            except Exception as e:
+                pass  # Skip duplicates
+        
+        conn.commit()
+        
+        # Get total count
+        if USE_POSTGRES:
+            cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'picker'")
+        else:
+            execute_query(cursor, "SELECT COUNT(*) FROM users WHERE role = 'picker'")
+        total = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        remaining = len(all_pickers) - total
+        done = remaining <= 0
+        
+        return jsonify({
+            'created_this_batch': created,
+            'total_in_db': total,
+            'total_expected': len(all_pickers),
+            'remaining': max(0, remaining),
+            'done': done,
+            'message': '✅ ALL DONE! You can now login with any picker.' if done else f'Created {created}. Refresh to load more. {remaining} remaining.'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+# Load pickers in batches (call multiple times until done) - OLD VERSION
 @app.route('/debug/load-batch')
 def load_batch():
     """Load pickers in batches of 30 - call repeatedly until all loaded"""
