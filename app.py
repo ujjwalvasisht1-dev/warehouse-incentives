@@ -1490,6 +1490,88 @@ def admin_upload_cohorts():
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
+# Force load pickers from CSV file
+@app.route('/debug/force-load-pickers')
+def force_load_pickers():
+    """Force load all pickers from CSV - run this once to fix the database"""
+    import csv
+    from datetime import datetime
+    
+    PICKERS_FILE = 'data_to_upload/pickers.csv'
+    
+    def parse_date(date_str):
+        if not date_str:
+            return None
+        formats = ['%d-%b-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_str.strip(), fmt)
+            except ValueError:
+                continue
+        return None
+    
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Step 1: Delete ALL existing pickers
+        if USE_POSTGRES:
+            cursor.execute("DELETE FROM users WHERE role = 'picker'")
+        else:
+            execute_query(cursor, "DELETE FROM users WHERE role = 'picker'")
+        conn.commit()
+        deleted = cursor.rowcount
+        
+        # Step 2: Load pickers from CSV
+        if not os.path.exists(PICKERS_FILE):
+            return jsonify({'error': f'File not found: {PICKERS_FILE}'}), 404
+        
+        created = 0
+        with open(PICKERS_FILE, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            
+            for row in reader:
+                picker_id = row.get('Casper ID', '').strip()
+                name = row.get('Name', '').strip()
+                cohort_str = row.get('Cohort', '').strip()
+                doj_str = row.get('DOJ', '').strip()
+                
+                if not picker_id:
+                    continue
+                
+                try:
+                    cohort = int(cohort_str) if cohort_str else None
+                except:
+                    cohort = None
+                
+                doj = parse_date(doj_str)
+                password_hash = generate_password_hash(picker_id)
+                
+                if USE_POSTGRES:
+                    cursor.execute('''
+                        INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                        VALUES (%s, %s, %s, %s, %s, %s, 0)
+                    ''', (picker_id, password_hash, 'picker', name, cohort, doj))
+                else:
+                    execute_query(cursor, '''
+                        INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                        VALUES (?, ?, ?, ?, ?, ?, 0)
+                    ''', (picker_id, password_hash, 'picker', name, cohort, str(doj) if doj else None))
+                created += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'deleted': deleted,
+            'created': created,
+            'message': f'Loaded {created} pickers! Login with picker_id as both username and password (e.g., ca.3867958 / ca.3867958)'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
 # Diagnostic endpoint to debug login issues
 @app.route('/debug/check-pickers')
 def debug_check_pickers():
