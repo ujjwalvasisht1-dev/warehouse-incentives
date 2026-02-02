@@ -1490,6 +1490,114 @@ def admin_upload_cohorts():
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
+# Load pickers in batches (call multiple times until done)
+@app.route('/debug/load-batch')
+def load_batch():
+    """Load pickers in batches of 30 - call repeatedly until all loaded"""
+    import csv as csv_module
+    from datetime import datetime as dt
+    
+    PICKERS_FILE = 'data_to_upload/pickers.csv'
+    BATCH_SIZE = 30
+    
+    def parse_date(date_str):
+        if not date_str:
+            return None
+        formats = ['%d-%b-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']
+        for fmt in formats:
+            try:
+                return dt.strptime(date_str.strip(), fmt)
+            except ValueError:
+                continue
+        return None
+    
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Get list of existing picker_ids
+        if USE_POSTGRES:
+            cursor.execute("SELECT LOWER(picker_id) as pid FROM users WHERE role = 'picker'")
+        else:
+            execute_query(cursor, "SELECT LOWER(picker_id) as pid FROM users WHERE role = 'picker'")
+        existing = set(row['pid'] for row in cursor.fetchall())
+        
+        # Read CSV and find pickers not yet in database
+        created = 0
+        skipped = 0
+        total_in_csv = 0
+        
+        with open(PICKERS_FILE, 'r', encoding='utf-8') as f:
+            reader = csv_module.DictReader(f)
+            
+            for row in reader:
+                total_in_csv += 1
+                picker_id = row.get('Casper ID', '').strip()
+                
+                if not picker_id:
+                    continue
+                
+                # Skip if already exists
+                if picker_id.lower() in existing:
+                    skipped += 1
+                    continue
+                
+                # Stop after BATCH_SIZE new inserts
+                if created >= BATCH_SIZE:
+                    break
+                
+                name = row.get('Name', '').strip()
+                cohort_str = row.get('Cohort', '').strip()
+                doj_str = row.get('DOJ', '').strip()
+                
+                try:
+                    cohort = int(cohort_str) if cohort_str else None
+                except:
+                    cohort = None
+                
+                doj = parse_date(doj_str)
+                password_hash = generate_password_hash(picker_id)
+                
+                if USE_POSTGRES:
+                    cursor.execute('''
+                        INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                        VALUES (%s, %s, %s, %s, %s, %s, 0)
+                    ''', (picker_id, password_hash, 'picker', name, cohort, doj))
+                else:
+                    execute_query(cursor, '''
+                        INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                        VALUES (?, ?, ?, ?, ?, ?, 0)
+                    ''', (picker_id, password_hash, 'picker', name, cohort, str(doj) if doj else None))
+                
+                created += 1
+                existing.add(picker_id.lower())
+        
+        conn.commit()
+        
+        # Get total count
+        if USE_POSTGRES:
+            cursor.execute("SELECT COUNT(*) as count FROM users WHERE role = 'picker'")
+        else:
+            execute_query(cursor, "SELECT COUNT(*) as count FROM users WHERE role = 'picker'")
+        total_pickers = cursor.fetchone()['count']
+        
+        conn.close()
+        
+        remaining = total_in_csv - total_pickers
+        done = remaining <= 0
+        
+        return jsonify({
+            'created_this_batch': created,
+            'total_pickers_in_db': total_pickers,
+            'total_in_csv': total_in_csv,
+            'remaining': max(0, remaining),
+            'done': done,
+            'message': 'ALL DONE! You can now login.' if done else f'Created {created}. Call this URL again to load more. {remaining} remaining.'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
 # Check if CSV file exists
 @app.route('/debug/check-csv')
 def debug_check_csv():
