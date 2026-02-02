@@ -1490,6 +1490,52 @@ def admin_upload_cohorts():
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
+# Diagnostic endpoint to debug login issues
+@app.route('/debug/check-pickers')
+def debug_check_pickers():
+    """Debug endpoint to check picker data in database"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Count all users
+        execute_query(cursor, "SELECT role, COUNT(*) as count FROM users GROUP BY role")
+        role_counts = cursor.fetchall()
+        
+        # Get sample pickers
+        execute_query(cursor, "SELECT picker_id, name, cohort FROM users WHERE role = 'picker' LIMIT 10")
+        sample_pickers = cursor.fetchall()
+        
+        # Test specific picker
+        test_picker_id = 'ca.3867958'
+        execute_query(cursor, "SELECT picker_id, password, name, cohort FROM users WHERE LOWER(picker_id) = LOWER(?)", (test_picker_id,))
+        test_picker = cursor.fetchone()
+        
+        password_test = None
+        if test_picker:
+            # Test password verification
+            password_test = {
+                'picker_id': test_picker['picker_id'],
+                'name': test_picker['name'],
+                'password_hash_length': len(test_picker['password']) if test_picker['password'] else 0,
+                'test_lowercase': check_password_hash(test_picker['password'], 'ca.3867958'),
+                'test_uppercase': check_password_hash(test_picker['password'], 'Ca.3867958'),
+                'test_picker123': check_password_hash(test_picker['password'], 'picker123'),
+            }
+        
+        conn.close()
+        
+        return jsonify({
+            'database_type': 'PostgreSQL' if USE_POSTGRES else 'SQLite',
+            'role_counts': [dict(r) for r in role_counts],
+            'sample_pickers': [dict(p) for p in sample_pickers],
+            'test_picker': password_test,
+            'message': 'If test_lowercase is True, login with ca.3867958 / ca.3867958'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 5001))
