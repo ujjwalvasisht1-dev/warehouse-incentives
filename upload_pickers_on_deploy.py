@@ -60,11 +60,17 @@ def upload_pickers():
         print(f"   Note: Column migration: {e}")
         conn.rollback()
     
+    # IMPORTANT: Delete ALL existing pickers to ensure clean data
+    # Keep only admin and supervisor users
+    cursor.execute("DELETE FROM users WHERE role = 'picker'")
+    deleted_count = cursor.rowcount
+    conn.commit()
+    print(f"🗑️  Cleared {deleted_count} existing pickers")
+    
     with open(PICKERS_FILE, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         
         created = 0
-        updated = 0
         
         for row in reader:
             # Get picker info - handle different column names
@@ -85,27 +91,18 @@ def upload_pickers():
             # Parse DOJ
             doj = parse_date(doj_str)
             
-            # Check if user exists
-            cursor.execute('SELECT id FROM users WHERE LOWER(picker_id) = LOWER(%s)', (picker_id,))
-            existing = cursor.fetchone()
-            
-            if existing:
-                # Update existing user
-                cursor.execute('''
-                    UPDATE users SET name = %s, cohort = %s, doj = %s, password = %s 
-                    WHERE LOWER(picker_id) = LOWER(%s)
-                ''', (name, cohort_num, doj, generate_password_hash(picker_id), picker_id))
-                updated += 1
-            else:
-                # Create new user with password = picker_id
+            # Create new user with password = picker_id (case-sensitive)
+            try:
                 cursor.execute('''
                     INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
                     VALUES (%s, %s, %s, %s, %s, %s, 0)
                 ''', (picker_id, generate_password_hash(picker_id), 'picker', name, cohort_num, doj))
                 created += 1
+            except Exception as e:
+                print(f"   Warning: Could not create {picker_id}: {e}")
         
         conn.commit()
-        print(f"✅ Pickers uploaded! Created: {created}, Updated: {updated}")
+        print(f"✅ Pickers uploaded! Created: {created}")
         
         # Show cohort summary
         cursor.execute('''
