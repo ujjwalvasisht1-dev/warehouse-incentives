@@ -1738,6 +1738,46 @@ def force_load_pickers():
         import traceback
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
+# Check specific picker
+@app.route('/debug/check-picker/<picker_id>')
+def debug_check_specific_picker(picker_id):
+    """Check if a specific picker exists and test password"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        execute_query(cursor, "SELECT picker_id, password, name, cohort FROM users WHERE LOWER(picker_id) = LOWER(?)", (picker_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            # Try to find similar
+            execute_query(cursor, "SELECT picker_id FROM users WHERE picker_id LIKE ?", (f'%{picker_id[-7:]}%',))
+            similar = cursor.fetchall()
+            conn.close()
+            return jsonify({
+                'found': False,
+                'picker_id': picker_id,
+                'similar_pickers': [s['picker_id'] for s in similar][:10]
+            })
+        
+        # Test password
+        password_works = check_password_hash(user['password'], picker_id)
+        password_works_lower = check_password_hash(user['password'], picker_id.lower())
+        
+        conn.close()
+        return jsonify({
+            'found': True,
+            'picker_id': user['picker_id'],
+            'name': user['name'],
+            'cohort': user['cohort'],
+            'password_test': password_works,
+            'password_test_lowercase': password_works_lower,
+            'message': f'Login with: {user[\"picker_id\"]} / {user[\"picker_id\"]}'
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
 # Diagnostic endpoint to debug login issues
 @app.route('/debug/check-pickers')
 def debug_check_pickers():
