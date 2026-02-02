@@ -1512,10 +1512,11 @@ def fast_load():
         
         # Get existing picker IDs
         if USE_POSTGRES:
-            cursor.execute("SELECT LOWER(picker_id) FROM users WHERE role = 'picker'")
+            cursor.execute("SELECT LOWER(picker_id) as pid FROM users WHERE role = 'picker'")
+            existing = set(row['pid'] for row in cursor.fetchall())
         else:
-            execute_query(cursor, "SELECT LOWER(picker_id) FROM users WHERE role = 'picker'")
-        existing = set(row[0] for row in cursor.fetchall())
+            execute_query(cursor, "SELECT LOWER(picker_id) as pid FROM users WHERE role = 'picker'")
+            existing = set(row['pid'] for row in cursor.fetchall())
         
         # Find pickers not yet in DB
         to_insert = []
@@ -1547,10 +1548,11 @@ def fast_load():
         
         # Get total count
         if USE_POSTGRES:
-            cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'picker'")
+            cursor.execute("SELECT COUNT(*) as cnt FROM users WHERE role = 'picker'")
+            total = cursor.fetchone()['cnt']
         else:
-            execute_query(cursor, "SELECT COUNT(*) FROM users WHERE role = 'picker'")
-        total = cursor.fetchone()[0]
+            execute_query(cursor, "SELECT COUNT(*) as cnt FROM users WHERE role = 'picker'")
+            total = cursor.fetchone()['cnt']
         
         conn.close()
         
