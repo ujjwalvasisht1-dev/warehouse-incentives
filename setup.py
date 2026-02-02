@@ -56,11 +56,20 @@ def init_database():
                 picker_id TEXT UNIQUE,
                 password TEXT,
                 role TEXT,
+                name TEXT,
                 cohort INTEGER DEFAULT NULL,
+                doj DATE DEFAULT NULL,
                 password_changed INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Add columns if they don't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS doj DATE")
+        except:
+            pass
         
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS items (
@@ -100,7 +109,9 @@ def init_database():
                 picker_id TEXT UNIQUE,
                 password TEXT,
                 role TEXT,
+                name TEXT,
                 cohort INTEGER DEFAULT NULL,
+                doj TEXT DEFAULT NULL,
                 password_changed INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -114,6 +125,16 @@ def init_database():
         
         try:
             cursor.execute('ALTER TABLE users ADD COLUMN cohort INTEGER DEFAULT NULL')
+        except:
+            pass
+        
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN name TEXT')
+        except:
+            pass
+        
+        try:
+            cursor.execute('ALTER TABLE users ADD COLUMN doj TEXT')
         except:
             pass
         
