@@ -249,13 +249,14 @@ def login():
                 session['name'] = None
                 session['doj'] = None
             
-            # Check if password needs to be changed (first login)
+            # Check if password needs to be changed (first login) - only for supervisors
             try:
                 password_changed = user['password_changed'] if user['password_changed'] else 0
             except:
                 password_changed = 0
             
-            if not password_changed and user['role'] in ['picker', 'supervisor']:
+            # Only supervisors need to change password on first login (pickers skip this)
+            if not password_changed and user['role'] == 'supervisor':
                 return redirect(url_for('change_password_first'))
             
             if user['role'] == 'supervisor':
