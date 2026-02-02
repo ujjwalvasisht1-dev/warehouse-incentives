@@ -1843,15 +1843,16 @@ def debug_check_specific_picker(picker_id):
         password_works = check_password_hash(user['password'], picker_id)
         password_works_lower = check_password_hash(user['password'], picker_id.lower())
         
+        picker_id_val = user['picker_id']
         conn.close()
         return jsonify({
             'found': True,
-            'picker_id': user['picker_id'],
+            'picker_id': picker_id_val,
             'name': user['name'],
             'cohort': user['cohort'],
             'password_test': password_works,
             'password_test_lowercase': password_works_lower,
-            'message': f'Login with: {user[\"picker_id\"]} / {user[\"picker_id\"]}'
+            'message': 'Login with: ' + picker_id_val + ' / ' + picker_id_val
         })
     except Exception as e:
         import traceback
