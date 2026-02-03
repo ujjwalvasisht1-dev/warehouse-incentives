@@ -1285,6 +1285,193 @@ def admin_clear_all():
     conn.close()
     return jsonify({'success': True, 'message': 'All data cleared (except admin users)'})
 
+# Store pending picker uploads in memory for chunked processing
+pending_picker_uploads = {}
+
+@app.route('/admin/upload-pickers-chunked', methods=['POST'])
+@admin_required  
+def admin_upload_pickers_chunked():
+    """Upload CSV and prepare for chunked processing"""
+    if 'picker_file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['picker_file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not file.filename.endswith('.csv'):
+        return jsonify({'error': 'File must be a CSV'}), 400
+    
+    try:
+        # Read CSV content
+        try:
+            content = file.read().decode('utf-8')
+        except UnicodeDecodeError:
+            file.seek(0)
+            content = file.read().decode('latin-1')
+        
+        csv_file = io.StringIO(content)
+        reader = csv.DictReader(csv_file)
+        
+        # Parse all records (fast - no password hashing yet)
+        records = []
+        for row in reader:
+            picker_id = row.get('Casper ID', row.get('casper_id', row.get('picker_id', ''))).strip()
+            if not picker_id:
+                continue
+            
+            name = row.get('Name', row.get('name', '')).strip()
+            cohort = row.get('Cohort', row.get('cohort', '')).strip()
+            doj_str = row.get('DOJ', row.get('doj', row.get('Date of Joining', ''))).strip()
+            
+            try:
+                cohort_num = int(cohort) if cohort else None
+            except ValueError:
+                cohort_num = None
+            
+            # Parse DOJ
+            doj = None
+            if doj_str:
+                for fmt in ['%d-%b-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+                    try:
+                        doj = datetime.strptime(doj_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+            
+            records.append({
+                'picker_id': picker_id,
+                'name': name,
+                'cohort': cohort_num,
+                'doj': str(doj) if doj else None
+            })
+        
+        # Store in memory with a unique ID
+        import uuid
+        upload_id = str(uuid.uuid4())[:8]
+        pending_picker_uploads[upload_id] = {
+            'records': records,
+            'processed': 0,
+            'created': 0,
+            'updated': 0
+        }
+        
+        return jsonify({
+            'success': True,
+            'upload_id': upload_id,
+            'total_records': len(records),
+            'message': f'Ready to process {len(records)} pickers. Call /admin/process-pickers-batch?id={upload_id} to start.'
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+@app.route('/admin/process-pickers-batch')
+@admin_required
+def admin_process_pickers_batch():
+    """Process a batch of uploaded pickers (50 at a time)"""
+    upload_id = request.args.get('id', '')
+    
+    if not upload_id or upload_id not in pending_picker_uploads:
+        return jsonify({'error': 'Invalid upload ID. Upload a file first.'}), 400
+    
+    upload = pending_picker_uploads[upload_id]
+    records = upload['records']
+    processed = upload['processed']
+    
+    if processed >= len(records):
+        # Clean up and return done
+        del pending_picker_uploads[upload_id]
+        return jsonify({
+            'done': True,
+            'created': upload['created'],
+            'updated': upload['updated'],
+            'total': upload['created'] + upload['updated'],
+            'message': 'All pickers processed!'
+        })
+    
+    # Process next batch of 50
+    batch_size = 50
+    batch = records[processed:processed + batch_size]
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    created = 0
+    updated = 0
+    
+    for rec in batch:
+        picker_id = rec['picker_id']
+        name = rec['name']
+        cohort = rec['cohort']
+        doj = rec['doj']
+        password_hash = generate_password_hash(picker_id)
+        
+        # Check if exists
+        execute_query(cursor, 'SELECT id FROM users WHERE LOWER(picker_id) = LOWER(?)', (picker_id,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            if USE_POSTGRES:
+                cursor.execute('''
+                    UPDATE users SET name = %s, cohort = %s, doj = %s, password = %s 
+                    WHERE LOWER(picker_id) = LOWER(%s)
+                ''', (name, cohort, doj, password_hash, picker_id))
+            else:
+                cursor.execute('''
+                    UPDATE users SET name = ?, cohort = ?, doj = ?, password = ? 
+                    WHERE LOWER(picker_id) = LOWER(?)
+                ''', (name, cohort, doj, password_hash, picker_id))
+            updated += 1
+        else:
+            if USE_POSTGRES:
+                cursor.execute('''
+                    INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                    VALUES (%s, %s, %s, %s, %s, %s, 0)
+                ''', (picker_id, password_hash, 'picker', name, cohort, doj))
+            else:
+                cursor.execute('''
+                    INSERT INTO users (picker_id, password, role, name, cohort, doj, password_changed)
+                    VALUES (?, ?, ?, ?, ?, ?, 0)
+                ''', (picker_id, password_hash, 'picker', name, cohort, doj))
+            created += 1
+    
+    conn.commit()
+    conn.close()
+    
+    # Update progress
+    upload['processed'] = processed + len(batch)
+    upload['created'] += created
+    upload['updated'] += updated
+    
+    remaining = len(records) - upload['processed']
+    done = remaining <= 0
+    
+    if done:
+        result = {
+            'done': True,
+            'created': upload['created'],
+            'updated': upload['updated'],
+            'total': upload['created'] + upload['updated'],
+            'message': 'All pickers processed!'
+        }
+        del pending_picker_uploads[upload_id]
+        return jsonify(result)
+    
+    return jsonify({
+        'done': False,
+        'processed': upload['processed'],
+        'total_records': len(records),
+        'remaining': remaining,
+        'created_so_far': upload['created'],
+        'updated_so_far': upload['updated'],
+        'batch_created': created,
+        'batch_updated': updated,
+        'message': f'Processed {upload["processed"]}/{len(records)}. {remaining} remaining.',
+        'next_url': f'/admin/process-pickers-batch?id={upload_id}'
+    })
+
 @app.route('/admin/upload-pickers', methods=['POST'])
 @admin_required
 def admin_upload_pickers():

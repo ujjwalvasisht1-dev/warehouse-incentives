@@ -287,7 +287,7 @@
     </div>
     
     <script>
-        // Picker Upload Handler (NEW FORMAT)
+        // Picker Upload Handler (CHUNKED for large files)
         document.getElementById('picker-upload-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -300,10 +300,12 @@
                 return;
             }
             
+            const fileSize = (fileInput.files[0].size / 1024 / 1024).toFixed(2);
+            
             uploadBtn.disabled = true;
             uploadBtn.textContent = 'Uploading...';
             resultDiv.className = 'upload-result';
-            resultDiv.innerHTML = '<strong>⏳ Processing pickers...</strong>';
+            resultDiv.innerHTML = `<strong>⏳ Uploading file (${fileSize} MB)...</strong>`;
             resultDiv.style.display = 'block';
             resultDiv.style.background = '#fff3cd';
             resultDiv.style.color = '#856404';
@@ -312,51 +314,70 @@
             formData.append('picker_file', fileInput.files[0]);
             
             try {
-                const response = await fetch('/admin/upload-pickers', {
+                // Step 1: Upload file for chunked processing
+                const uploadResponse = await fetch('/admin/upload-pickers-chunked', {
                     method: 'POST',
                     body: formData
                 });
                 
-                const responseText = await response.text();
-                let data;
-                try {
-                    data = JSON.parse(responseText);
-                } catch (parseError) {
-                    resultDiv.className = 'upload-result error';
-                    resultDiv.innerHTML = `<strong>❌ Server Error:</strong><br><pre style="white-space: pre-wrap; font-size: 12px;">${responseText.substring(0, 500)}</pre>`;
-                    uploadBtn.disabled = false;
-                    uploadBtn.textContent = 'Upload Pickers';
-                    return;
+                const uploadData = await uploadResponse.json();
+                
+                if (!uploadData.success) {
+                    throw new Error(uploadData.error || 'Upload failed');
                 }
                 
-                if (data.success) {
-                    resultDiv.className = 'upload-result success';
-                    let cohortSummary = '';
-                    if (data.cohort_summary) {
-                        cohortSummary = '<br><br><strong>Cohort Summary:</strong><br>';
-                        for (const [cohort, count] of Object.entries(data.cohort_summary)) {
-                            cohortSummary += `Cohort ${cohort}: ${count} pickers<br>`;
-                        }
+                const uploadId = uploadData.upload_id;
+                const totalRecords = uploadData.total_records;
+                
+                resultDiv.innerHTML = `<strong>⏳ Processing ${totalRecords} pickers...</strong><br>
+                    <div id="progress-bar" style="background: #eee; border-radius: 4px; height: 20px; margin: 10px 0;">
+                        <div id="progress-fill" style="background: #11998e; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <span id="progress-text">Starting...</span>`;
+                
+                // Step 2: Process in batches
+                let done = false;
+                let created = 0;
+                let updated = 0;
+                
+                while (!done) {
+                    const batchResponse = await fetch(`/admin/process-pickers-batch?id=${uploadId}`);
+                    const batchData = await batchResponse.json();
+                    
+                    if (batchData.error) {
+                        throw new Error(batchData.error);
                     }
-                    resultDiv.innerHTML = `
-                        <strong>✅ Pickers Uploaded Successfully!</strong><br>
-                        Total pickers: ${data.total_pickers}<br>
-                        New users created: ${data.created}<br>
-                        Existing users updated: ${data.updated}
-                        ${cohortSummary}
-                    `;
-                    setTimeout(() => location.reload(), 3000);
-                } else {
-                    resultDiv.className = 'upload-result error';
-                    let errorHtml = `<strong>❌ Error:</strong> ${data.error}`;
-                    if (data.trace) {
-                        errorHtml += `<br><br><pre style="white-space: pre-wrap; font-size: 11px; max-height: 200px; overflow: auto;">${data.trace}</pre>`;
+                    
+                    done = batchData.done;
+                    
+                    if (done) {
+                        created = batchData.created;
+                        updated = batchData.updated;
+                    } else {
+                        const progress = Math.round((batchData.processed / totalRecords) * 100);
+                        document.getElementById('progress-fill').style.width = progress + '%';
+                        document.getElementById('progress-text').textContent = 
+                            `Processed ${batchData.processed}/${totalRecords} (${batchData.created_so_far} new, ${batchData.updated_so_far} updated)`;
                     }
-                    resultDiv.innerHTML = errorHtml;
                 }
+                
+                // Success!
+                resultDiv.className = 'upload-result success';
+                resultDiv.innerHTML = `
+                    <strong>✅ Pickers Uploaded Successfully!</strong><br>
+                    Total pickers: ${created + updated}<br>
+                    New users created: ${created}<br>
+                    Existing users updated: ${updated}
+                `;
+                setTimeout(() => location.reload(), 3000);
+                
             } catch (error) {
                 resultDiv.className = 'upload-result error';
-                resultDiv.innerHTML = `<strong>❌ Network Error:</strong> ${error.message}`;
+                resultDiv.innerHTML = `<strong>❌ Error:</strong> ${error.message}<br><br>
+                    <strong>💡 Alternative:</strong> For very large files, add the CSV to the repository:<br>
+                    1. Place CSV at <code>data_to_upload/pickers.csv</code><br>
+                    2. Run <code>python prepare_pickers.py</code><br>
+                    3. Commit, push, and deploy`;
             }
             
             uploadBtn.disabled = false;
