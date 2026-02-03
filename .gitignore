@@ -37,3 +37,5 @@ Thumbs.db
 check_data.py
 verify_sample_pickers.py
 
+*.db
+incentives.db

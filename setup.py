@@ -6,21 +6,40 @@ Run this once before starting the application
 
 from werkzeug.security import generate_password_hash
 import os
+import sys
+
+# Debug: Print all database-related env vars
+print("🔍 Checking environment variables...")
+for key in sorted(os.environ.keys()):
+    if 'DATABASE' in key.upper() or 'PG' in key.upper() or 'POSTGRES' in key.upper():
+        # Don't print full URL for security
+        val = os.environ[key]
+        if len(val) > 20:
+            val = val[:20] + '...'
+        print(f"   {key} = {val}")
 
 # Database setup - PostgreSQL for production, SQLite for local dev
-DATABASE_URL = os.environ.get('DATABASE_URL')
+# Try multiple possible env var names
+DATABASE_URL = (
+    os.environ.get('DATABASE_URL') or 
+    os.environ.get('DATABASE_PUBLIC_URL') or
+    os.environ.get('POSTGRES_URL')
+)
+
 if DATABASE_URL:
-    # PostgreSQL (Render)
+    # PostgreSQL
     import psycopg2
     from psycopg2.extras import RealDictCursor
     USE_POSTGRES = True
-    # Fix for Render's postgres:// vs postgresql://
+    # Fix for postgres:// vs postgresql://
     if DATABASE_URL.startswith('postgres://'):
         DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+    print(f"✅ Found DATABASE_URL, using PostgreSQL")
 else:
     # SQLite (local development)
     import sqlite3
     USE_POSTGRES = False
+    print("⚠️ No DATABASE_URL found, falling back to SQLite")
 
 DATABASE = 'incentives.db'
 
