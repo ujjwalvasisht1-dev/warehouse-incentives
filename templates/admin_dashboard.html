@@ -384,7 +384,7 @@
             uploadBtn.textContent = 'Upload Pickers';
         });
         
-        // Data Upload Handler
+        // Data Upload Handler (CHUNKED for large files)
         document.getElementById('upload-form').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -403,7 +403,7 @@
             uploadBtn.disabled = true;
             uploadBtn.textContent = `Uploading... (${fileSize} MB)`;
             resultDiv.className = 'upload-result';
-            resultDiv.innerHTML = '<strong>⏳ Processing file, please wait...</strong><br>This may take a few minutes for large files.';
+            resultDiv.innerHTML = `<strong>⏳ Uploading file (${fileSize} MB)...</strong>`;
             resultDiv.style.display = 'block';
             resultDiv.style.background = '#fff3cd';
             resultDiv.style.color = '#856404';
@@ -412,52 +412,67 @@
             formData.append('csv_file', fileInput.files[0]);
             
             try {
-                console.log('Starting upload...');
-                const response = await fetch('/admin/upload', {
+                // Step 1: Upload file for chunked processing
+                console.log('Starting chunked upload...');
+                const uploadResponse = await fetch('/admin/upload-data-chunked', {
                     method: 'POST',
                     body: formData
                 });
                 
-                console.log('Response status:', response.status);
-                const responseText = await response.text();
-                console.log('Response text:', responseText);
+                const uploadData = await uploadResponse.json();
                 
-                let data;
-                try {
-                    data = JSON.parse(responseText);
-                } catch (parseError) {
-                    resultDiv.className = 'upload-result error';
-                    resultDiv.innerHTML = `<strong>❌ Server Error:</strong><br><pre style="white-space: pre-wrap; font-size: 12px;">${responseText.substring(0, 500)}</pre>`;
-                    uploadBtn.disabled = false;
-                    uploadBtn.textContent = 'Upload & Process CSV';
-                    return;
+                if (!uploadData.success) {
+                    throw new Error(uploadData.error || 'Upload failed');
                 }
                 
-                if (data.success) {
-                    resultDiv.className = 'upload-result success';
-                    let html = `
-                        <strong>✅ Upload Successful!</strong><br>
-                        File: ${data.filename}<br>
-                        Rows inserted: ${data.rows_inserted}<br>
-                        New pickers added: ${data.pickers_added}
-                    `;
-                    if (data.warnings && data.warnings.length > 0) {
-                        html += `<br><br><strong>⚠️ Warnings:</strong><br>${data.warnings.join('<br>')}`;
+                const uploadId = uploadData.upload_id;
+                const totalRecords = uploadData.total_records;
+                
+                resultDiv.innerHTML = `<strong>⏳ Processing ${totalRecords.toLocaleString()} records...</strong><br>
+                    <div id="data-progress-bar" style="background: #eee; border-radius: 4px; height: 20px; margin: 10px 0;">
+                        <div id="data-progress-fill" style="background: #667eea; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <span id="data-progress-text">Starting...</span>`;
+                
+                // Step 2: Process in batches
+                let done = false;
+                let totalInserted = 0;
+                let filename = '';
+                
+                while (!done) {
+                    const batchResponse = await fetch(`/admin/process-data-batch?id=${uploadId}`);
+                    const batchData = await batchResponse.json();
+                    
+                    if (batchData.error) {
+                        throw new Error(batchData.error);
                     }
-                    resultDiv.innerHTML = html;
-                    setTimeout(() => location.reload(), 3000);
-                } else {
-                    resultDiv.className = 'upload-result error';
-                    let errorHtml = `<strong>❌ Error:</strong> ${data.error}`;
-                    if (data.trace) {
-                        errorHtml += `<br><br><pre style="white-space: pre-wrap; font-size: 11px; max-height: 200px; overflow: auto;">${data.trace}</pre>`;
+                    
+                    done = batchData.done;
+                    filename = batchData.filename || filename;
+                    
+                    if (done) {
+                        totalInserted = batchData.rows_inserted;
+                    } else {
+                        const progress = Math.round((batchData.processed / totalRecords) * 100);
+                        document.getElementById('data-progress-fill').style.width = progress + '%';
+                        document.getElementById('data-progress-text').textContent = 
+                            `Processed ${batchData.processed.toLocaleString()}/${totalRecords.toLocaleString()} records (${progress}%)`;
                     }
-                    resultDiv.innerHTML = errorHtml;
                 }
+                
+                // Success!
+                resultDiv.className = 'upload-result success';
+                resultDiv.innerHTML = `
+                    <strong>✅ Upload Successful!</strong><br>
+                    File: ${filename}<br>
+                    Rows inserted: ${totalInserted.toLocaleString()}
+                `;
+                setTimeout(() => location.reload(), 3000);
+                
             } catch (error) {
                 console.error('Upload error:', error);
                 resultDiv.className = 'upload-result error';
-                resultDiv.innerHTML = `<strong>❌ Network Error:</strong> ${error.message}<br><br>The file may be too large or the server timed out. Try a smaller file or check your connection.`;
+                resultDiv.innerHTML = `<strong>❌ Error:</strong> ${error.message}`;
             }
             
             uploadBtn.disabled = false;

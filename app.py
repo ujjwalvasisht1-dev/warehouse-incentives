@@ -1116,6 +1116,207 @@ def admin_dashboard():
                           pickers_in_cohorts=pickers_in_cohorts,
                           recent_uploads=recent_uploads)
 
+# Store pending data uploads in memory for chunked processing
+pending_data_uploads = {}
+
+@app.route('/admin/upload-data-chunked', methods=['POST'])
+@admin_required
+def admin_upload_data_chunked():
+    """Upload productivity CSV and prepare for chunked processing"""
+    if 'csv_file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['csv_file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not file.filename.endswith('.csv'):
+        return jsonify({'error': 'File must be a CSV'}), 400
+    
+    try:
+        # Read CSV content
+        try:
+            content = file.read().decode('utf-8')
+        except UnicodeDecodeError:
+            file.seek(0)
+            content = file.read().decode('latin-1')
+        
+        csv_file = io.StringIO(content)
+        reader = csv.DictReader(csv_file)
+        
+        # Parse all records (fast - just parsing)
+        records = []
+        for row in reader:
+            updated_at_str = row.get('updated_at', '').strip()
+            if not updated_at_str:
+                continue
+            
+            try:
+                updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                try:
+                    updated_at = datetime.strptime(updated_at_str, '%Y-%m-%d %H:%M:%S.%f')
+                except ValueError:
+                    continue
+            
+            picker_id = row.get('picker_ldap', '').strip()
+            if not picker_id:
+                continue
+            
+            records.append({
+                'source_warehouse': row.get('source_warehouse', ''),
+                'picker_id': picker_id,
+                'item_status': row.get('item_status', ''),
+                'dispatch_by_date': row.get('dispatch_by_date', ''),
+                'external_picklist_id': row.get('external_picklist_id', ''),
+                'location_bin_id': row.get('location_bin_id', ''),
+                'location_sequence': row.get('location_sequence', ''),
+                'updated_at': updated_at.strftime('%Y-%m-%d %H:%M:%S')
+            })
+        
+        # Store in memory with a unique ID
+        import uuid
+        upload_id = str(uuid.uuid4())[:8]
+        pending_data_uploads[upload_id] = {
+            'records': records,
+            'filename': file.filename,
+            'processed': 0,
+            'inserted': 0
+        }
+        
+        return jsonify({
+            'success': True,
+            'upload_id': upload_id,
+            'total_records': len(records),
+            'message': f'Ready to process {len(records)} records.'
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+@app.route('/admin/process-data-batch')
+@admin_required
+def admin_process_data_batch():
+    """Process a batch of uploaded productivity data (2000 at a time)"""
+    upload_id = request.args.get('id', '')
+    
+    if not upload_id or upload_id not in pending_data_uploads:
+        return jsonify({'error': 'Invalid upload ID. Upload a file first.'}), 400
+    
+    upload = pending_data_uploads[upload_id]
+    records = upload['records']
+    processed = upload['processed']
+    filename = upload['filename']
+    
+    if processed >= len(records):
+        # Record the upload and clean up
+        conn = get_db()
+        cursor = conn.cursor()
+        if USE_POSTGRES:
+            cursor.execute('''
+                INSERT INTO processed_csvs (filename, processed_at) 
+                VALUES (%s, %s)
+                ON CONFLICT (filename) DO UPDATE SET processed_at = EXCLUDED.processed_at
+            ''', (filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        else:
+            cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
+                          (filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
+        
+        result = {
+            'done': True,
+            'rows_inserted': upload['inserted'],
+            'filename': filename,
+            'message': f"All {upload['inserted']} records processed!"
+        }
+        del pending_data_uploads[upload_id]
+        return jsonify(result)
+    
+    # Process next batch of 2000 records
+    batch_size = 2000
+    batch = records[processed:processed + batch_size]
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    # Prepare batch for insert
+    items_batch = [(
+        rec['source_warehouse'],
+        rec['picker_id'],
+        rec['item_status'],
+        rec['dispatch_by_date'],
+        rec['external_picklist_id'],
+        rec['location_bin_id'],
+        rec['location_sequence'],
+        rec['updated_at'],
+        filename
+    ) for rec in batch]
+    
+    if USE_POSTGRES:
+        from psycopg2.extras import execute_values
+        execute_values(cursor, '''
+            INSERT INTO items (
+                source_warehouse, picker_id, item_status, dispatch_by_date,
+                external_picklist_id, location_bin_id, location_sequence,
+                updated_at, csv_file
+            ) VALUES %s
+        ''', items_batch)
+    else:
+        cursor.executemany('''
+            INSERT INTO items (
+                source_warehouse, picker_id, item_status, dispatch_by_date,
+                external_picklist_id, location_bin_id, location_sequence,
+                updated_at, csv_file
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', items_batch)
+    
+    conn.commit()
+    conn.close()
+    
+    # Update progress
+    upload['processed'] = processed + len(batch)
+    upload['inserted'] += len(batch)
+    
+    remaining = len(records) - upload['processed']
+    done = remaining <= 0
+    
+    if done:
+        # Record the upload
+        conn = get_db()
+        cursor = conn.cursor()
+        if USE_POSTGRES:
+            cursor.execute('''
+                INSERT INTO processed_csvs (filename, processed_at) 
+                VALUES (%s, %s)
+                ON CONFLICT (filename) DO UPDATE SET processed_at = EXCLUDED.processed_at
+            ''', (filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        else:
+            cursor.execute('INSERT OR REPLACE INTO processed_csvs (filename, processed_at) VALUES (?, ?)',
+                          (filename, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
+        
+        result = {
+            'done': True,
+            'rows_inserted': upload['inserted'],
+            'filename': filename,
+            'message': f"All {upload['inserted']} records processed!"
+        }
+        del pending_data_uploads[upload_id]
+        return jsonify(result)
+    
+    return jsonify({
+        'done': False,
+        'processed': upload['processed'],
+        'total_records': len(records),
+        'remaining': remaining,
+        'inserted_so_far': upload['inserted'],
+        'message': f"Processed {upload['processed']}/{len(records)}. {remaining} remaining.",
+        'next_url': f'/admin/process-data-batch?id={upload_id}'
+    })
+
 @app.route('/admin/upload', methods=['POST'])
 @admin_required
 def admin_upload():
